@@ -1,7 +1,4 @@
-"""DWG inspection and an explicit ODA-backed DXF conversion prototype.
-
-This is not an independent DWG geometry decoder. No shell interpolation is used.
-"""
+"""DWG inspection and conversion CLI, with an explicit ODA compatibility path."""
 import argparse
 from collections import Counter
 import hashlib
@@ -10,7 +7,6 @@ import os
 from pathlib import Path
 import platform
 import shutil
-import struct
 import subprocess
 import tempfile
 import uuid
@@ -23,18 +19,11 @@ def inspect_dwg(path):
     result = {'path': str(path.resolve()), 'sha256': hashlib.sha256(data).hexdigest(),
               'bytes': len(data), 'signature': signature, 'geometry_decoded': False}
     if signature == 'AC1015':
-        if len(data) < 25:
-            raise ValueError('truncated AC1015 header')
-        count = struct.unpack_from('<I', data, 0x15)[0]
-        if count > (len(data)-25)//9:
-            raise ValueError('section directory extends beyond file')
-        sections = []
-        for i in range(count):
-            ident, offset, size = struct.unpack_from('<BII', data, 25+9*i)
-            if offset+size > len(data):
-                raise ValueError(f'section {ident} extends beyond file')
-            sections.append({'id': ident, 'offset': offset, 'size': size})
-        result['r2000_section_directory'] = sections
+        from .native import _sections
+        result['r2000_section_directory'] = [
+            {'id': ident, 'offset': offset, 'size': size}
+            for ident, (offset, size) in _sections(data).items()
+        ]
     elif signature != 'AC1032':
         raise ValueError(f'unexamined DWG signature: {signature!r}')
     return result
@@ -106,11 +95,17 @@ def main():
     for name in ('inspect', 'check-dxf'):
         s=sub.add_parser(name);s.add_argument('path', type=Path)
     s=sub.add_parser('convert');s.add_argument('path', type=Path);s.add_argument('output', type=Path)
-    s.add_argument('--appdir', type=Path, required=True);s.add_argument('--docker-image');s.add_argument('--timeout', type=int, default=300)
+    s.add_argument('--appdir', type=Path);s.add_argument('--docker-image');s.add_argument('--timeout', type=int, default=300)
     a=p.parse_args()
     if a.command=='inspect': result=inspect_dwg(a.path)
     elif a.command=='check-dxf': result=inspect_dxf(a.path)
-    else: result=convert(a.path,a.output,a.appdir,a.docker_image,a.timeout)
+    else:
+        from . import dwg_to_dxf
+        output = dwg_to_dxf(a.path, a.output, appdir=a.appdir,
+                            docker_image=a.docker_image, timeout=a.timeout)
+        result = inspect_dxf(output)
+        result.update(output=str(output.resolve()),
+                      backend='independent AC1015' if a.appdir is None else 'closed-source ODA')
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 if __name__=='__main__':

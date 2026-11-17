@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dwg2image"
-version = "0.1.0"
-description = "Convert DWG drawings to PNG via an external ODA converter and ezdxf"
+version = "0.2.0"
+description = "Experimental independent AC1015 DWG decoding and PNG rendering"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["ezdxf>=1.4.5,<2", "matplotlib>=3.8,<4", "Pillow>=10"]
