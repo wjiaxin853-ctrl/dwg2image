@@ -1,0 +1,39 @@
+[
+  {
+    "dxf_version": "AC1032",
+    "modelspace_entities": {
+      "LINE": 30,
+      "TEXT": 1,
+      "LWPOLYLINE": 18,
+      "CIRCLE": 11,
+      "ARC": 2
+    },
+    "blocks": 6,
+    "layers": 8,
+    "audit_errors": 0,
+    "audit_fixes": 0,
+    "sha256": "fc4908f5566acbbb2ebfcbbd84ce647eb6d44bf24b0479cfb8034712bd70fd2c",
+    "limitation": "Readable DXF does not prove geometric fidelity to the DWG.",
+    "output": "/Users/wjx/Documents/wjx/dwg_parse/ODA_Converter-rea/output/1 刀开关.dxf",
+    "backend": "closed-source ODA",
+    "source_sha256": "5a9d92fdbc99e4007e25a86c1892a2221204ddbfb2c7207924ccaf6e64df58f4"
+  },
+  {
+    "dxf_version": "AC1032",
+    "modelspace_entities": {
+      "CIRCLE": 30,
+      "LINE": 36,
+      "LWPOLYLINE": 4,
+      "TEXT": 34
+    },
+    "blocks": 5,
+    "layers": 4,
+    "audit_errors": 0,
+    "audit_fixes": 0,
+    "sha256": "cf4ea08b5ff302c8dca28244a5006075e0b49e2b069c3920a05a26059cf2d274",
+    "limitation": "Readable DXF does not prove geometric fidelity to the DWG.",
+    "output": "/Users/wjx/Documents/wjx/dwg_parse/ODA_Converter-rea/output/Electrical Wiring Dig.dxf",
+    "backend": "closed-source ODA",
+    "source_sha256": "6d8d12e5d08ceee53f559c93498fa41dbd6c24361004d8542dbacbff0f06af49"
+  }
+]

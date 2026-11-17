@@ -1,0 +1,7 @@
+000000000017a9c8 T OdDwgR18Compressor::decompress(unsigned char const*, unsigned int, unsigned char*, unsigned int)
+000000000017ae7e T OdDwgR18Compressor::decompress(OdBinaryData&, OdBinaryData&, unsigned int)
+000000000018e200 T OdDwgR21Compressor::decompress(unsigned char const*, unsigned int, unsigned char*, unsigned int)
+000000000018e6fa T OdDwgR21Compressor::decompress(OdBinaryData&, OdBinaryData&, int)
+000000000016ef16 W OdDwgR21PagedStream::decode(unsigned char*, unsigned char*, unsigned int, unsigned int, OdRSCoder&)
+000000000016efc6 W OdDwgR21PagedStream::decodeRS(unsigned char*, unsigned int, OdRSCoder&, unsigned char*, unsigned char*)
+000000000016d77e W OdRSCoder::decode(unsigned char*)

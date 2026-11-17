@@ -1,0 +1,143 @@
+0000000000578340 T OdDbEntity::dwgInFields(OdDbDwgFiler*)
+0000000000683054 T OdDbLayout::dwgInFields(OdDbDwgFiler*)
+0000000000607202 T OdDbObject::dwgInFields(OdDbDwgFiler*)
+000000000060424c T OdDbObject::dwgIn(OdDbDwgFiler*)
+00000000005edc74 T OdDbGeoData::dwgInFields(OdDbDwgFiler*)
+00000000005df9d0 T OdDbXrecord::dwgInFields(OdDbDwgFiler*)
+0000000000301b0a T OdDbDatabase::dwgInFields(OdDbDwgFiler*)
+0000000000303098 T OdDbDatabase::readFile(OdStreamBuf*, bool, OdDbAuditInfo*, OdString const&, bool)
+0000000000303208 T OdDbDatabase::writeFile(OdStreamBuf*, OdDb::SaveType, OdDb::DwgVersion, bool, int)
+000000000069195e T OdDbIdBuffer::dwgInFields(OdDbDwgFiler*)
+000000000066bf92 T OdDbMaterial::dwgInFields(OdDbDwgFiler*)
+00000000005a339e T OdDbViewport::dwgInFields(OdDbDwgFiler*)
+000000000064ff52 T OdDbIndexImpl::dwgInFields(OdDbDwgFiler*)
+000000000053f78a T OdDbBlockBegin::dwgInFields(OdDbDwgFiler*)
+00000000004ca3fa T OdDbBlockTable::dwgInFields(OdDbDwgFiler*)
+0000000000614fdc T OdDbDictionary::dwgInFields(OdDbDwgFiler*)
+00000000005c2314 T OdDbLayerIndex::dwgInFields(OdDbDwgFiler*)
+00000000005ffdd2 T OdDbObjectImpl::dwgInXData(OdDbDwgFiler*)
+0000000000606c42 T OdDbObjectImpl::dwgInRefs(OdDbDwgFiler*)
+00000000002c96a6 T OdDbEvalVariant::dwgInFields(OdDbDwgFiler*)
+000000000069c23c T OdDbLayerFilter::dwgInFields(OdDbDwgFiler*)
+0000000000537462 T OdDbSymbolTable::dwgInFields(OdDbDwgFiler*)
+0000000000635e04 T OdDbVisualStyle::dwgInFields(OdDbDwgFiler*)
+000000000048584c T OdXDataIterator::dxfOutItem(OdDbDxfFiler*)
+000000000048cd44 T OdCmTransparency::dwgIn(OdDbDwgFiler*)
+000000000044b838 T OdDbDatabaseImpl::dwgInFields(OdDbDwgFiler&, OdDbHeaderLoadInfo&)
+000000000044b86c T OdDbDatabaseImpl::dwgInChecksum(OdDbDwgFiler*)
+0000000000690ca6 T OdDbIdBufferImpl::dwgInFields(OdDbDwgFiler*)
+000000000066bda8 T OdDbMaterialImpl::dwgInFields(OdDbDwgFiler*, OdDbObject*)
+0000000000640f52 T OdDbPlotSettings::dwgInFields(OdDbDwgFiler*)
+000000000065c5c6 T OdDbSpatialIndex::dwgInFields(OdDbDwgFiler*)
+00000000002c28da T OdRxEventReactor::dxfOutComplete(OdDbDatabase*)
+00000000006a0cd2 T OdDbDictionaryVar::dwgInFields(OdDbDwgFiler*)
+0000000000511b08 T OdDbLinetypeTable::dwgInFields(OdDbDwgFiler*)
+00000000005d6046 T OdDbSortentsTable::dwgInFields(OdDbDwgFiler*)
+00000000006480ee T OdDbSpatialFilter::dwgInFields(OdDbDwgFiler*)
+00000000004d31c8 T OdDbVXTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000005baa84 T OdEntityContainer::dwgInFields(OdDbDwgFiler*)
+000000000058df8a T OdDbBlockReference::dwgInFields(OdDbDwgFiler*)
+00000000004eb47e T OdDbUCSTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000006a3c72 T OdDbHostAppServices::readFile(OdStreamBuf*, bool, bool, OdString const&)
+00000000002d1680 W OdDbHostAppServices::readFile(OdString const&, bool, bool, Oda::FileShareMode, OdString const&)
+00000000006582e6 T OdDbLongTransaction::dwgInFields(OdDbDwgFiler*)
+00000000004f2fb2 T OdDbViewTableRecord::dwgInFields(OdDbDwgFiler*)
+000000000052a448 T OdDbBlockTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000004e2cc2 T OdDbLayerTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000006400d2 T OdDbPlotSettingsImpl::dwgInFields(OdDbDwgFiler*)
+00000000006a0474 T OdDbDictionaryVarImpl::dwgInFields(OdDbDwgFiler*)
+00000000005f6b60 T OdDbObjectContextData::dwgInFields(OdDbDwgFiler*)
+00000000005f3ff8 T OdDbObjectContextData::dwgInContextData(OdDbDwgFiler*)
+000000000053a960 T OdDbRegAppTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000005d33aa T OdDbSortentsTableImpl::dwgInFields(OdDbDwgFiler*)
+0000000000647aa8 T OdDbSpatialFilterImpl::dwgInFields(OdDbDwgFiler*)
+0000000000502ac4 T OdDbSymbolTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000004bcefa T OdDbTextStyleTableImpl::dwgInFields(OdDbDwgFiler*)
+000000000050e1e2 T OdDbLinetypeTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000004f2e38 T OdDbViewTableRecordImpl::dwgInFields(OdDbDwgFiler*)
+00000000004b75d6 T OdDbViewportTableRecord::dwgInFields(OdDbDwgFiler*)
+00000000005bb958 T OdEntitySeqEndContainer::dwgInFields(OdDbDwgFiler*)
+00000000004f86b4 T OdDbTextStyleTableRecord::dwgInFields(OdDbDwgFiler*)
+000000000064e34a T OdDbDictionaryWithDefault::dwgInFields(OdDbDwgFiler*)
+00000000005f4024 T OdDbObjectContextDataImpl::dwgInContextData(OdDbDwgFiler*)
+00000000004d4b94 T OdDbAbstractViewTableRecord::dwgInFields(OdDbDwgFiler*)
+0000000000621774 T OdDbObjectContextDataManager::dwgInFields(OdDbObject const*, OdDbDwgFiler*)
+00000000005f4138 T OdDbBlkRefObjectContextDataImpl::dwgInContextData(OdDbDwgFiler*)
+00000000005f40d4 T OdDbAnnotScaleObjectContextDataImpl::dwgInContextData(OdDbDwgFiler*)
+0000000000411f9c T OdDbDate::dwgIn(OdDbDwgFiler*)
+00000000004a8a92 T OdViInfo::dwgInFields(OdDbDwgFiler*)
+000000000048c95c T OdCmColor::dwgInAsTrueColor(OdDbDwgFiler*)
+000000000048ca64 T OdCmColor::dwgIn(OdDbDwgFiler*)
+0000000000674f24 T OdDbColor::dwgInFields(OdDbDwgFiler*)
+00000000006547d8 T OdDbIndex::dwgInFields(OdDbDwgFiler*)
+000000000069934e T OdDbScale::dwgInFields(OdDbDwgFiler*)
+0000000000576b7e T OdDbEntity::dxfOutFields(OdDbDxfFiler*) const
+000000000056bd86 T OdDbEntity::dxfOutFields_R12(OdDbDxfFiler*) const
+000000000057435c T OdDbEntity::dxfOut(OdDbDxfFiler*) const
+0000000000676240 T OdDbFilter::dxfOutFields(OdDbDxfFiler*) const
+000000000067e9a0 T OdDbLayout::dxfOutFields(OdDbDxfFiler*) const
+0000000000605664 T OdDbObject::dxfOutFields(OdDbDxfFiler*) const
+00000000005f841e T OdDbObject::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000005f9fd8 T OdDbObject::dxfOut(OdDbDxfFiler*) const
+00000000005ef280 T OdDbGeoData::dxfOutFields(OdDbDxfFiler*) const
+00000000005e155e T OdDbXrecord::dxfOutFields(OdDbDxfFiler*) const
+000000000058029e T OdDbBlockEnd::dxfOutFields(OdDbDxfFiler*) const
+00000000005802fe T OdDbBlockEnd::dxfOutFields_R12(OdDbDxfFiler*) const
+0000000000691686 T OdDbIdBuffer::dxfOutFields(OdDbDxfFiler*) const
+0000000000671632 T OdDbMaterial::dxfOutFields(OdDbDxfFiler*) const
+00000000005a1222 T OdDbViewport::dxfOutFields(OdDbDxfFiler*) const
+0000000000599198 T OdDbViewport::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000002bff64 W LayerStateData::dxfOut(OdDbDxfFiler&) const
+000000000053d8dc T OdDbBlockBegin::dxfOutFields(OdDbDxfFiler*) const
+000000000053d41c T OdDbBlockBegin::dxfOutFields_R12(OdDbDxfFiler*) const
+0000000000614d70 T OdDbDictionary::dxfOutFields(OdDbDxfFiler*) const
+00000000005c2ef0 T OdDbLayerIndex::dxfOutFields(OdDbDxfFiler*) const
+00000000005fcd52 T OdDbObjectImpl::dxfOutXData(OdDbDxfFiler*) const
+00000000002c84d2 T OdDbEvalVariant::dxfOutFields(OdDbDxfFiler*) const
+000000000069d030 T OdDbLayerFilter::dxfOutFields(OdDbDxfFiler*) const
+000000000064e182 T OdDbPlaceHolder::dxfOutFields(OdDbDxfFiler*) const
+00000000005872b8 T OdDbSequenceEnd::dxfOutFields(OdDbDxfFiler*) const
+0000000000533b78 T OdDbSymbolTable::dxfOutFields(OdDbDxfFiler*) const
+0000000000532832 T OdDbSymbolTable::dxfOutFields_R12(OdDbDxfFiler*) const
+0000000000538958 T OdDbSymbolTable::dxfOut(OdDbDxfFiler*) const
+0000000000638a30 T OdDbVisualStyle::dxfOutFields(OdDbDxfFiler*) const
+0000000000670920 T OdDbMaterialImpl::dxfOutFields(OdDbDxfFiler*, OdDbObject const*) const
+00000000006412fe T OdDbPlotSettings::dxfOutFields(OdDbDxfFiler*) const
+0000000000659b98 T OdDbSpatialIndex::dxfOutFields(OdDbDxfFiler*) const
+00000000005aa76a T OdDbViewportImpl::dxfOutXData(OdDbDxfFiler*) const
+00000000006a0b18 T OdDbDictionaryVar::dxfOutFields(OdDbDxfFiler*) const
+0000000000515bbe T OdDbLinetypeTable::dxfOut(OdDbDxfFiler*) const
+00000000005d60b0 T OdDbSortentsTable::dxfOutFields(OdDbDxfFiler*) const
+000000000064a958 T OdDbSpatialFilter::dxfOutFields(OdDbDxfFiler*) const
+00000000004d2fda T OdDbVXTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000005bc8b0 T OdEntityContainer::dxfOutFields(OdDbDxfFiler*) const
+000000000058e3fc T OdDbBlockReference::dxfOutFields(OdDbDxfFiler*) const
+0000000000587e26 T OdDbBlockReference::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000005870f2 T OdDbBlockReference::dxfOut(OdDbDxfFiler*) const
+00000000004e9854 T OdDbUCSTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004e97d6 T OdDbUCSTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000004ef74e T OdDbViewTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004ef4c4 T OdDbViewTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+000000000052a0b8 T OdDbBlockTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004e4d8e T OdDbLayerTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004e5400 T OdDbLayerTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000005f6e24 T OdDbObjectContextData::dxfOutFields(OdDbDxfFiler*) const
+000000000053a9e4 T OdDbRegAppTableRecord::dxfOutFields(OdDbDxfFiler*) const
+000000000053abf8 T OdDbRegAppTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000005028da T OdDbSymbolTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004fb8b4 T OdDbSymbolTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+0000000000506ad0 T OdDbLinetypeTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000005066aa T OdDbLinetypeTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000004b5210 T OdDbViewportTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004b5718 T OdDbViewportTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+00000000005bc99c T OdEntitySeqEndContainer::dxfOut(OdDbDxfFiler*) const
+00000000004fa26a T OdDbTextStyleTableRecord::dxfOutFields(OdDbDxfFiler*) const
+00000000004fa3d8 T OdDbTextStyleTableRecord::dxfOutFields_R12(OdDbDxfFiler*) const
+000000000064e3f2 T OdDbDictionaryWithDefault::dxfOutFields(OdDbDxfFiler*) const
+00000000005f6f26 T OdDbBlkRefObjectContextData::dxfOutFields(OdDbDxfFiler*) const
+00000000005f6eb6 T OdDbAnnotScaleObjectContextData::dxfOutFields(OdDbDxfFiler*) const
+000000000048c6f8 T OdCmColor::dxfOutXRec(OdDbDxfFiler*, int) const
+000000000048c81c T OdCmColor::dxfOut(OdDbDxfFiler*, int) const
+0000000000675028 T OdDbColor::dxfOutFields(OdDbDxfFiler*) const
+0000000000654842 T OdDbIndex::dxfOutFields(OdDbDxfFiler*) const
+000000000069958e T OdDbScale::dxfOutFields(OdDbDxfFiler*) const

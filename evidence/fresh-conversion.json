@@ -1,0 +1,19 @@
+{
+  "dxf_version": "AC1032",
+  "modelspace_entities": {
+    "LWPOLYLINE": 1,
+    "CIRCLE": 10,
+    "LINE": 21,
+    "DIMENSION": 2,
+    "HATCH": 1
+  },
+  "blocks": 6,
+  "layers": 2,
+  "audit_errors": 0,
+  "audit_fixes": 0,
+  "sha256": "822906e84d53bb69de913cc1fa629484893b4bf3833e900097a8eed736a07922",
+  "limitation": "Readable DXF does not prove geometric fidelity to the DWG.",
+  "output": "/Users/wjx/Documents/wjx/dwg_parse/ODA_Converter-rea/output/2D Drawings EX 3 - 1.dxf",
+  "backend": "closed-source ODA",
+  "source_sha256": "f2d28d088bf56d36b23308abe962d1dd993ccc3e1e10ae08d753f9a4d4dcd54b"
+}
