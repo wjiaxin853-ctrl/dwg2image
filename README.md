@@ -1,6 +1,54 @@
 # dwg2image
 
-项目目标是将 DWG 图纸转换为图片。当前目录包含初步逆向成果和 Python 验证原型，已验证 DWG→DXF 阶段；图片渲染尚未接入本项目。**尚未独立重写 DWG 几何解码器**；`convert` 仍执行用户提供的 ODA 二进制。`inspect` 和 `check-dxf` 不执行 ODA。没有修改原始 AppImage、demo 或原项目输出。
+项目目标是将 DWG 图纸转换为图片。当前目录包含初步逆向成果和 Python 验证原型，已验证 DWG→DXF 阶段；已接入 DXF→PNG 库接口。**尚未独立重写 DWG 几何解码器**；`convert` 仍执行用户提供的 ODA 二进制。`inspect` 和 `check-dxf` 不执行 ODA。没有修改原始 AppImage、demo 或原项目输出。
+
+## Python 库安装与调用
+
+需要 Python 3.10+。目前尚未发布到 PyPI，可直接从本仓库安装：
+
+```sh
+pip install "git+https://github.com/wjiaxin853-ctrl/dwg2image.git"
+```
+
+仅渲染已有 DXF 不需要 ODA 或 Docker：
+
+```python
+from dwg2image import dxf_to_png
+
+image = dxf_to_png("drawing.dxf", "drawing.png", dpi=150)
+```
+
+DWG 输入需要另外准备 ODA（解包方式见下文）。Linux x86-64 需 Xvfb 和相关共享库；macOS 可使用本项目 Dockerfile 构建的运行镜像：
+
+```python
+from dwg2image import dwg_to_png, dwg_to_dxf
+
+image = dwg_to_png(
+    "drawing.dwg", "drawing.png",
+    appdir="/absolute/path/to/extracted/appdir",
+    docker_image="dwg2image-runtime:local",  # 原生 Linux x86-64 可省略
+    dpi=150,
+)
+```
+
+三个转换接口接受字符串或 `Path`，返回输出 `Path`，已有目标文件会抛出 `FileExistsError`。ODA 非零退出会抛出 `RuntimeError`，超时抛出 `subprocess.TimeoutExpired`。`dwg_to_png` 的中间 DXF 自动清理。
+
+PNG 只渲染模型空间；字体替换、外部参照和不支持的实体可能影响显示。DWG 转换仍调用闭源 ODA，本包不包含或自动下载 ODA。Matplotlib 绘图接口不保证多线程并发安全，服务端并发建议使用独立进程。
+
+安装后可运行 `dwg2image --help` 或 `python -m dwg2image --help`；现有 CLI 保留 inspect/check-dxf/convert 子命令。
+
+发布准备：
+
+```sh
+python -m pip install build twine
+python -m build
+python -m twine check dist/*
+python -m twine upload dist/*
+```
+
+最后一步需要 PyPI 账户的项目权限和发布凭证，并确认名称可用。尚未执行上传；发布成功后才可使用 `pip install dwg2image`。没有自行添加开源许可证，发布前应由项目所有者选择许可证。
+
+运行库只安装 ezdxf、Matplotlib、Pillow 及其依赖；逆向脚本的额外依赖使用 `pip install ".[analysis]"` 安装。wheel 不含 demo、分析证据、ODA 程序或本地输出。
 
 ## 已定位的实现
 
@@ -75,8 +123,15 @@ docker build --platform linux/amd64 -t dwg2image-runtime:local .
 - `2D Drawings EX 3 - 1.dwg` 已在本次真实运行 ODA 后生成 DXF，ezdxf 可读取、audit errors=0，模型空间含 LINE 21、CIRCLE 10、LWPOLYLINE 1、DIMENSION 2、HATCH 1。详见 `evidence/fresh-conversion.json`。
 - 首次 offscreen 失败；第二次 xvfb-run 阻塞在启动等待；最终用 `run_headless.sh` 直接启动 Xvfb 成功。脚本只等待 X socket 就绪，不依赖 xvfb-run 的信号握手。
 - `evidence/existing-dxf-check.json` 是原项目已有 DXF 的检查，明确与本次新转换分开。
-- 尚未验证 PNG 渲染、全量46图转换、几何/字体保真、原生 Linux 性能或纯 Python 解码。
+- 初次调查时尚未验证 PNG 渲染、全量46图转换、几何/字体保真、原生 Linux 性能或纯 Python 解码。
 
 另两份真实转换 `1 刀开关.dwg`（AC1015）、`Electrical Wiring Dig.dwg`（AC1032）也已成功，DXF 审计错误均为 0。记录见 `evidence/additional-conversions.json`。
 
 项目已从 `ODA_Converter-rea` 更名为 `dwg2image`。`evidence/` 保留采集时的原始路径，旧目录名属于历史证据。
+
+## 库化验证（2026-11-17）
+
+- 6 项 unittest 通过，含真实 DXF→PNG 渲染及已有文件保护。
+- wheel、sdist 构建成功，`twine check` 均通过。
+- wheel 安装到独立虚拟环境，在 `/tmp` 从 site-packages 导入，实际调用 `dwg_to_png()` 成功生成 320×452 PNG（14317 字节），并检查存在非空白像素。
+- 上述端到端样例为 `2D Drawings EX 3 - 1.dwg`，使用本地 ODA 和 Docker 镜像；不是纯 Python DWG 解码或全量保真验证。

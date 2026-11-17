@@ -1,3 +1,1 @@
-ezdxf==1.4.5
-pyelftools==0.33
-capstone==5.0.9
+.[analysis]

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dwg2image"
+version = "0.1.0"
+description = "Convert DWG drawings to PNG via an external ODA converter and ezdxf"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["ezdxf>=1.4.5,<2", "matplotlib>=3.8,<4", "Pillow>=10"]
+
+[project.optional-dependencies]
+analysis = ["pyelftools==0.33", "capstone==5.0.9"]
+
+[project.urls]
+Repository = "https://github.com/wjiaxin853-ctrl/dwg2image"
+
+[project.scripts]
+dwg2image = "dwg2image._conversion:main"
+
+[tool.setuptools]
+packages = ["dwg2image"]
+
+[tool.setuptools.package-data]
+dwg2image = ["run_headless.sh"]
