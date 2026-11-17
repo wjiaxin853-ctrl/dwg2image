@@ -4,8 +4,6 @@ artifacts/
 output/
 *.log
 .DS_Store
-/disassembly.txt
-/evidence/fresh-conversion-error.txt
 build/
 dist/
 *.egg-info/

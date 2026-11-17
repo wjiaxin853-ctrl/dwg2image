@@ -10,9 +10,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["ezdxf>=1.4.5,<2", "matplotlib>=3.8,<4", "Pillow>=10"]
 
-[project.optional-dependencies]
-analysis = ["pyelftools==0.33", "capstone==5.0.9"]
-
 [project.urls]
 Repository = "https://github.com/wjiaxin853-ctrl/dwg2image"
 

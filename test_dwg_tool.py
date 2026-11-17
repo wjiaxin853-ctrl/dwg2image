@@ -2,7 +2,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from dwg_tool import inspect_dwg
+from dwg2image import inspect_dwg
 
 class HeaderTests(unittest.TestCase):
     def inspect_bytes(self, data):
