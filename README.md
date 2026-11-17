@@ -6,10 +6,10 @@ DWG 解码依赖用户自行准备的 **ODA File Converter**，本库不包含�
 
 ## 安装
 
-目前尚未发布到 PyPI，可通过 GitHub 安装：
+通过 PyPI 安装：
 
 ```sh
-pip install "git+https://github.com/wjiaxin853-ctrl/dwg2image.git"
+pip install dwg2image
 ```
 
 ## 使用
