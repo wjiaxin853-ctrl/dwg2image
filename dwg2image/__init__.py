@@ -30,8 +30,8 @@ def dwg_to_dxf(source: str | Path, destination: str | Path, *,
 
 def dwg_to_png(source: str | Path, destination: str | Path, *,
                appdir: str | Path | None = None, docker_image: str | None = None,
-               timeout: float = 300, dpi: int = 150,
-               background: str = "#FFFFFF") -> Path:
+               timeout: float = 300, dpi: int = 300,
+               background: str | None = None) -> Path:
     """Convert DWG to a modelspace PNG; temporary DXF is removed afterwards."""
     destination = Path(destination)
     if destination.exists():

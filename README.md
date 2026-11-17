@@ -30,7 +30,7 @@ pip install --upgrade dwg2image
 ```python
 from dwg2image import dwg_to_png
 
-image = dwg_to_png("drawing.dwg", "drawing.png", dpi=150)
+image = dwg_to_png("drawing.dwg", "drawing.png", dpi=300)
 print(image)
 ```
 
@@ -47,7 +47,7 @@ dwg_to_dxf("drawing.dwg", "drawing.dxf")
 ```python
 from dwg2image import dxf_to_png
 
-dxf_to_png("drawing.dxf", "drawing.png", dpi=150, background="#FFFFFF")
+dxf_to_png("drawing.dxf", "drawing.png", dpi=300, background="#FFFFFF")
 ```
 
 ### 检查支持范围
@@ -79,6 +79,8 @@ for entity in drawing.modelspace():
 | 复杂线型、外部参照、循环块引用 | 未实现，使用时明确报错 |
 | AC1032 及其他 DWG 版本 | 尚未独立实现 |
 
+默认使用 **300 DPI、CAD 布局背景**，保留源颜色，并设置最小可见线宽。可显式传 `background="#FFFFFF"` 使用白底。
+
 图片渲染**模型空间**。尚未恢复全局 Header 变量（包括源单位、全局线型比例）；独立 DXF 输出明确使用无单位，而非猜测物理单位。没有实现完整的图纸空间、视口、打印配置及所有 CAD 语义。自定义字体缺失时可能替换字体，不能据此承诺完整视觉保真。
 
 目前明确支持的源代码页为 ASCII、Windows 1252、932、936、949、950；其他代码页会报错，不会猜测编码。
@@ -91,8 +93,8 @@ for entity in drawing.modelspace():
 | --- | --- | --- | --- |
 | `source` | 三个转换接口 | 必填 | 输入文件 |
 | `destination` | 三个转换接口 | 必填 | 输出文件；图片必须为 `.png` |
-| `dpi` | PNG 接口 | `150` | 正整数；不是固定像素宽高 |
-| `background` | PNG 接口 | `"#FFFFFF"` | 图片背景色 |
+| `dpi` | PNG 接口 | `300` | 正整数；不是固定像素宽高 |
+| `background` | PNG 接口 | `None` | 跟随 CAD 布局背景，通常为深色；传入颜色可覆盖 |
 | `appdir` | DWG 接口 | `None` | 省略为独立解码；传入则显式选择 ODA |
 | `docker_image` | ODA 路径 | `None` | 兼容运行镜像名；必须同时传 `appdir` |
 | `timeout` | ODA 路径 | `300` | ODA 调用上限（秒），不约束独立解码或 PNG 渲染 |
@@ -180,3 +182,7 @@ DWG2IMAGE_TEST_DIR=/path/to/demo .venv/bin/python -m unittest -v
 ## 许可证
 
 当前仓库尚未声明开源许可证。ODA File Converter 是独立第三方软件，使用条款由 ODA 提供。
+
+## 0.2.1 修复
+
+修复 DXF 写出接口默认值覆盖 LWPOLYLINE 闭合标志的问题，恢复方框和轮廓的闭合边；新增闭合/开放/plinegen 的序列化回归测试。默认预览改为 300 DPI、跟随 CAD 布局背景，并保持高 DPI 下线条可见。以用户提供的同名 PNG 做视觉核对；字体缺失导致的字形差异尚未消除。

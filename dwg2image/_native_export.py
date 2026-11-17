@@ -116,7 +116,8 @@ def to_dxf_document(drawing: NativeDrawing):
             attributes['name'] = drawing.blocks[block_handle]['name']
         if kind == 'LWPOLYLINE':
             points = attributes.pop('_points')
-            layout.add_lwpolyline(points, format='xyseb', dxfattribs=attributes)
+            layout.add_lwpolyline(points, format='xyseb',
+                                  close=bool(attributes['flags'] & 1), dxfattribs=attributes)
         else:
             layout.new_entity(kind, dxfattribs=attributes)
 
