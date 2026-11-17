@@ -74,6 +74,45 @@ class NativeDrawingTests(unittest.TestCase):
     def setUp(self):
         self.directory = Path(os.environ['DWG2IMAGE_TEST_DIR'])
 
+    def test_mtext_source_fields_and_dxf_roundtrip(self):
+        import ezdxf
+        source = self.directory / '1 继电器.dwg'
+        drawing = read_dwg(source)
+        text = next(e for e in drawing.modelspace() if e['handle'] == '5D89')
+        self.assertEqual(text['attributes']['text'], 'JZC4')
+        self.assertEqual(text['attributes']['attachment_point'], 5)
+        self.assertEqual(text['attributes']['char_height'], 8)
+        self.assertAlmostEqual(text['attributes']['width'], 16.16181701881578)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'mtext.dxf'
+            with patch('subprocess.run', side_effect=AssertionError('external execution')):
+                dwg_to_dxf(source, output)
+            document = ezdxf.readfile(output)
+            texts = list(document.modelspace().query('MTEXT'))
+            self.assertEqual(len(texts), 6)
+            self.assertEqual(next(e for e in texts if e.text == 'JZC4').dxf.attachment_point, 5)
+            self.assertFalse(document.audit().errors)
+
+    def test_hatch_boundaries_and_simple_linetypes_survive_projection(self):
+        import ezdxf
+        for name, count in [('ABB-断路器', 1303), ('ATS NS250双电源转换开关', 8)]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'hatch.dxf'
+                dwg_to_dxf(self.directory / (name + '.dwg'), output)
+                document = ezdxf.readfile(output)
+                self.assertEqual(len(document.modelspace()), count)
+                hatches = [e for e in document.entitydb.values() if e.dxftype() == 'HATCH']
+                self.assertTrue(hatches)
+                for hatch in hatches:
+                    for boundary in hatch.paths:
+                        for handle in boundary.source_boundary_objects:
+                            self.assertIsNotNone(document.entitydb.get(handle))
+                self.assertFalse(document.audit().errors)
+                if name == 'ABB-断路器':
+                    self.assertEqual(len(hatches), 12)
+                    pattern = document.linetypes.get('EB_DASHDOT').pattern_tags.tags
+                    self.assertEqual([t.value for t in pattern if t.code == 49], [30, -3, 3, -3])
+
     def test_native_full_modelspace_without_any_subprocess(self):
         import ezdxf
         from PIL import Image

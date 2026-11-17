@@ -71,6 +71,8 @@ def to_dxf_document(drawing: NativeDrawing):
             owned.setdefault(entity['owner'], []).append(entity)
     built = set()
     active = set()
+    emitted = {}
+    hatch_boundaries = []
 
     def build_block(handle):
         if handle in active:
@@ -103,7 +105,7 @@ def to_dxf_document(drawing: NativeDrawing):
                           color=entity['color'], invisible=entity['invisible'],
                           ltscale=entity['ltscale'], lineweight=_lineweight(entity['lineweight']))
         kind = entity['type']
-        if kind == 'TEXT':
+        if kind in ('TEXT', 'MTEXT'):
             style = attributes.pop('style_handle')
             if style not in drawing.styles:
                 raise DwgFormatError(f'missing text style {style:X}')
@@ -116,13 +118,43 @@ def to_dxf_document(drawing: NativeDrawing):
             attributes['name'] = drawing.blocks[block_handle]['name']
         if kind == 'LWPOLYLINE':
             points = attributes.pop('_points')
-            layout.add_lwpolyline(points, format='xyseb',
+            target = layout.add_lwpolyline(points, format='xyseb',
                                   close=bool(attributes['flags'] & 1), dxfattribs=attributes)
+        elif kind == 'MTEXT':
+            text = attributes.pop('text')
+            target = layout.add_mtext(text, dxfattribs=attributes)
+        elif kind == 'HATCH':
+            paths = attributes.pop('_paths')
+            lines = attributes.pop('_pattern_lines')
+            seeds = attributes.pop('_seeds')
+            target = layout.new_entity('HATCH', dxfattribs=attributes)
+            for path in paths:
+                if 'vertices' in path:
+                    boundary = target.paths.add_polyline_path(path['vertices'],
+                        is_closed=path['closed'], flags=path['flags'])
+                else:
+                    boundary = target.paths.add_edge_path(flags=path['flags'])
+                    for source in path['edges']:
+                        edge = dict(source)
+                        edge_kind = edge.pop('type')
+                        if edge_kind != 'line':
+                            raise UnsupportedDwgError(f'HATCH {edge_kind} edges are not yet verified for export')
+                        boundary.add_line(edge['start'], edge['end'])
+                hatch_boundaries.append((boundary, path['source_handles']))
+            if not attributes['solid_fill']:
+                target.set_pattern_definition(lines)
+            if seeds:
+                target.set_seed_points(seeds)
         else:
-            layout.new_entity(kind, dxfattribs=attributes)
+            target = layout.new_entity(kind, dxfattribs=attributes)
+        emitted[entity['handle']] = target.dxf.handle
 
     for entity in drawing.modelspace():
         emit(entity, document.modelspace())
+    for boundary, handles in hatch_boundaries:
+        if any(handle not in emitted for handle in handles):
+            raise UnsupportedDwgError('HATCH references an unexported boundary entity')
+        boundary.source_boundary_objects = [emitted[handle] for handle in handles]
     return document
 
 

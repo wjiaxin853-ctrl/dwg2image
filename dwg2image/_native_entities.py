@@ -76,6 +76,28 @@ def _lwpolyline(reader):
     return result
 
 
+def _mtext(reader):
+    result = {'insert': _point(reader), 'extrusion': _point(reader),
+              'text_direction': _point(reader), 'width': reader.double(),
+              'char_height': reader.double(), 'attachment_point': reader.short(),
+              'flow_direction': reader.short(), 'rect_height': reader.double(),
+              'rect_width': reader.double()}
+    length = reader.short()
+    if length < 0:
+        raise DwgFormatError('negative MTEXT byte length')
+    result['_text_bytes'] = reader.raw(length)
+    result['line_spacing_style'] = reader.short()
+    result['line_spacing_factor'] = reader.double()
+    reader.bits(1)  # R2000 reserved/unknown bit, before the handle stream.
+    return result
+
+
+def _ellipse(reader):
+    return {'center': _point(reader), 'major_axis': _point(reader),
+            'extrusion': _point(reader), 'ratio': reader.double(),
+            'start_param': reader.double(), 'end_param': reader.double()}
+
+
 def _solid(reader):
     result = {'thickness': _thickness(reader)}
     elevation = reader.double()
@@ -110,8 +132,8 @@ def decode_entity(type_code, reader):
 
     Reserved keys: _points carries LWPOLYLINE x/y/start-width/end-width/bulge;
     _text_bytes preserves source text bytes; _has_attribs selects INSERT tails.
-    TEXT's STYLE and INSERT's BLOCK_HEADER handles follow common entity handles.
+    TEXT/MTEXT STYLE and INSERT BLOCK_HEADER handles follow common entity handles.
     """
-    decoder = {1: _text, 7: _insert, 0x1f: _solid, 0x20: _solid,
+    decoder = {1: _text, 7: _insert, 0x1f: _solid, 0x20: _solid, 0x23: _ellipse, 0x2c: _mtext,
                0x4d: _lwpolyline}.get(type_code)
     return decoder(reader) if decoder else None

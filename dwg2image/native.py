@@ -32,11 +32,11 @@ class NativeDrawing:
 
 
 _TYPES = {1: 'TEXT', 7: 'INSERT', 17: 'ARC', 18: 'CIRCLE', 19: 'LINE',
-          27: 'POINT', 31: 'SOLID', 32: 'TRACE', 77: 'LWPOLYLINE'}
+          27: 'POINT', 31: 'SOLID', 32: 'TRACE', 35: 'ELLIPSE', 44: 'MTEXT', 77: 'LWPOLYLINE'}
 _NAMES = {**_TYPES, 15: 'POLYLINE_2D', 16: 'POLYLINE_3D',
           20: 'DIMENSION_ORDINATE', 21: 'DIMENSION_LINEAR',
           22: 'DIMENSION_ALIGNED', 26: 'DIMENSION_DIAMETER',
-          36: 'SPLINE', 44: 'MTEXT', 78: 'HATCH'}
+          36: 'SPLINE', 78: 'HATCH'}
 _ENTITY_TYPES = (set(range(1, 48)) - {42}) | {77, 78, 0x1F2}
 _CODEPAGES = {1: 'ascii', 30: 'cp1252', 38: 'cp932', 39: 'gbk', 40: 'cp949', 41: 'cp950'}
 
@@ -263,7 +263,9 @@ def _linetype(reader, encoding, endbit):
         x, y = reader.rd(), reader.rd()
         scale, rotation = reader.double(), reader.double()
         flags = reader.short()
-        complex_pattern |= bool(shape or flags or x or y or scale != 1 or rotation)
+        # Only shape/text flags give the auxiliary fields meaning. ODA exports
+        # supplied simple patterns with unused scale=0 as ordinary dash lists.
+        complex_pattern |= bool(flags & ~1)
     reader.skip(256 * 8)
     if reader.pos != endbit:
         raise DwgFormatError('linetype data bit length mismatch')
@@ -318,8 +320,12 @@ def read_dwg(source: str | Path) -> NativeDrawing:
         if kind not in _ENTITY_TYPES and not classes.get(kind, ('', False))[1]:
             continue
         common = _common(reader)
-        attributes = _geometry(kind, reader) if kind in _TYPES else None
         name = _NAMES.get(kind, classes.get(kind, (f'TYPE_{kind:X}', True))[0])
+        if name == 'HATCH':
+            from ._native_hatch import decode_hatch
+            attributes = decode_hatch(reader)
+        else:
+            attributes = _geometry(kind, reader) if kind in _TYPES else None
         if attributes is None:
             if common['mode'] == 2:
                 unsupported[name] += 1
@@ -333,7 +339,11 @@ def read_dwg(source: str | Path) -> NativeDrawing:
         owner, layer, linetype = _handles(reader, endbit, handle, common)
         if '_text_bytes' in attributes:
             attributes['text'] = attributes.pop('_text_bytes').removesuffix(b'\x00').decode(encoding)
-        if kind == 1:
+        if name == 'HATCH':
+            attributes['pattern_name'] = attributes.pop('_pattern_name_bytes').removesuffix(b'\x00').decode(encoding)
+            for path, count in zip(attributes['_paths'], attributes.pop('_boundary_handle_counts')):
+                path['source_handles'] = [f'{resolve_handle(reader.handle(), handle):X}' for _ in range(count)]
+        if kind in (1, 44):
             attributes['style_handle'] = resolve_handle(reader.handle(), handle)
         elif kind == 7:
             attributes['block_handle'] = resolve_handle(reader.handle(), handle)
