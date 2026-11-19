@@ -204,7 +204,7 @@ def _handles(reader, endbit, handle, common, legacy=False):
     return owner, layer, linetype
 
 
-def _geometry(kind, reader, *, legacy=False):
+def _geometry(kind, reader, *, legacy=False, version=b'AC1015'):
     if kind == 19 and legacy:
         result = dict(start=tuple(reader.double() for _ in range(3)),
                       end=tuple(reader.double() for _ in range(3)))
@@ -223,7 +223,7 @@ def _geometry(kind, reader, *, legacy=False):
         result = dict(location=tuple(reader.double() for _ in range(3)))
     else:
         from ._native_entities import decode_entity
-        return decode_entity(kind, reader, legacy=legacy)
+        return decode_entity(kind, reader, legacy=legacy, version=version)
     result['thickness'] = 0.0 if not legacy and reader.bits(1) else reader.double()
     result['extrusion'] = (0.0, 0.0, 1.0) if not legacy and reader.bits(1) else tuple(reader.double() for _ in range(3))
     if kind == 17:
@@ -309,6 +309,22 @@ def _block(reader, encoding, legacy=False):
     base_point = tuple(reader.double() for _ in range(3))
     return dict(name=name, base_point=base_point, external=bool(external or overlay),
                 path=reader.text(encoding))
+
+
+def _decode_text(raw: bytes, encoding: str) -> str:
+    """Decode a DWG string, tolerating UTF-8 written under an ANSI code page.
+
+    R2000-R2004 files normally use the header code page, but some producers
+    write UTF-8 bytes while keeping (for example) code page 936 in the header.
+    A strict UTF-8 decode is only attempted after the declared code page fails,
+    so valid legacy text keeps its declared encoding.
+    """
+    try:
+        return raw.decode(encoding)
+    except UnicodeDecodeError:
+        if encoding in ('ascii', 'cp1250', 'cp1251', 'cp1252'):
+            raise
+        return raw.decode('utf-8')
 
 
 def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
@@ -398,7 +414,7 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             from ._native_entities import _polyline3d
             attributes = _polyline3d(reader)
         else:
-            attributes = _geometry(kind, reader, legacy=legacy) if kind in _TYPES else None
+            attributes = _geometry(kind, reader, legacy=legacy, version=version) if kind in _TYPES else None
         if attributes is None:
             if common['mode'] == 2:
                 unsupported[name] += 1
@@ -411,7 +427,12 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             raise DwgFormatError(f'{name} {handle:X}: entity data ends at {reader.pos}, expected {endbit}')
         owner, layer, linetype = _handles(reader, endbit, handle, common, legacy)
         if '_text_bytes' in attributes:
-            attributes['text'] = attributes.pop('_text_bytes').removesuffix(b'\x00').decode(encoding)
+            raw_text = attributes.pop('_text_bytes').removesuffix(b'\x00')
+            try:
+                attributes['text'] = _decode_text(raw_text, encoding)
+            except UnicodeDecodeError:
+                raise DwgFormatError(
+                    f'{name} {handle:X}: text bytes {raw_text!r} are not valid {encoding}') from None
         if name == 'HATCH':
             attributes['pattern_name'] = attributes.pop('_pattern_name_bytes').removesuffix(b'\x00').decode(encoding)
             for path, count in zip(attributes['_paths'], attributes.pop('_boundary_handle_counts')):

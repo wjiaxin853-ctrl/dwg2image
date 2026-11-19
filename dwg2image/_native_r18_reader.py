@@ -64,7 +64,7 @@ def _decode_body(record):
                       rect_height_present=record.version >= b'AC1021')
     if kind in (17, 18, 19, 27):
         return _geometry(kind, reader)
-    return decode_entity(kind, reader, split_string=True, r18=True)
+    return decode_entity(kind, reader, split_string=True, r18=True, version=record.version)
 
 
 def _read_type_handles(record, common, attributes, name):
@@ -192,7 +192,8 @@ def read_r18_dwg(source: str | Path):
                     attributes = {'_sab_data': sab_records[record.handle]}
                 else:
                     raise UnsupportedDwgError(
-                        f'R18 {name} {record.handle:X} payload is not decoded: {exc}'
+                        f'R18 {name} {record.handle:X} payload is not decoded at '
+                        f'{record.data_reader.pos}/{record.data_end} bits: {exc}'
                     ) from exc
         if kind == 38 and record.handle in sab_records:
             attributes = attributes or {}

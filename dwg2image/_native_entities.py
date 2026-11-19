@@ -20,7 +20,33 @@ def _thickness(reader):
     return 0.0 if reader.bits(1) else reader.double()
 
 
-def _text(reader, *, split_string=False):
+def _text_value(reader, *, split_string=False):
+    if split_string:
+        return reader.text().encode('utf-8')
+    length = reader.short()
+    if length < 0:
+        raise DwgFormatError('negative TEXT byte length')
+    return reader.raw(length)
+
+
+def _text(reader, *, split_string=False, legacy=False):
+    if legacy:
+        # R13/R14 (AC1012/AC1014): no DataFlags byte and no default-value
+        # bitcodes; every field is present.  See ODA DWG specification 20.4.3.
+        elevation = reader.double()
+        x, y = reader.rd(), reader.rd()
+        ax, ay = reader.rd(), reader.rd()
+        result = {"insert": (x, y, elevation), "align_point": (ax, ay, elevation),
+                  "extrusion": _point(reader), "thickness": reader.double()}
+        result['oblique'] = math.degrees(reader.double())
+        result['rotation'] = math.degrees(reader.double())
+        result['height'] = reader.double()
+        result['width'] = reader.double()
+        result['_text_bytes'] = _text_value(reader, split_string=split_string)
+        result['text_generation_flag'] = reader.short()
+        result['halign'] = reader.short()
+        result['valign'] = reader.short()
+        return result
     flags = reader.bits(8)
     elevation = 0.0 if flags & 1 else reader.rd()
     x, y = reader.rd(), reader.rd()
@@ -31,13 +57,7 @@ def _text(reader, *, split_string=False):
     result['rotation'] = 0.0 if flags & 8 else math.degrees(reader.rd())
     result['height'] = reader.rd()
     result['width'] = 1.0 if flags & 16 else reader.rd()
-    if split_string:
-        result['_text_bytes'] = reader.text().encode('utf-8')
-    else:
-        length = reader.short()
-        if length < 0:
-            raise DwgFormatError('negative TEXT byte length')
-        result['_text_bytes'] = reader.raw(length)
+    result['_text_bytes'] = _text_value(reader, split_string=split_string)
     result['text_generation_flag'] = 0 if flags & 32 else reader.short()
     result['halign'] = 0 if flags & 64 else reader.short()
     result['valign'] = 0 if flags & 128 else reader.short()
@@ -45,7 +65,7 @@ def _text(reader, *, split_string=False):
 
 
 def decode_attribute(type_code, reader, encoding, *, split_string=False, version=b'AC1015'):
-    result = _text(reader, split_string=split_string)
+    result = _text(reader, split_string=split_string, legacy=version < b'AC1015')
     if version >= b'AC1024':
         reader.bits(8)  # attribute record version
     if version >= b'AC1032' and reader.bits(8) not in (0, 1):
@@ -191,24 +211,37 @@ def _spline(reader, *, r18=False):
             'knots': knots, '_control_points': control_points, '_weights': weights}
 
 
-def _leader(reader, *, r18=False):
+def _leader(reader, *, r18=False, version=b'AC1015'):
     reader.bits(1)  # reserved
     annotation_type, path_type = reader.short(), reader.short()
     count = reader.long()
     if count < 0 or count > (len(reader.data) * 8 - reader.pos) // 6:
         raise DwgFormatError('invalid LEADER vertex count')
+    # ODA specification 20.4.47: vertices, origin, extrusion, x direction and
+    # offset to block insertion point; endpoint projection exists since R14,
+    # R13 stores DIMGAP instead.
     result = {'annotation_type': annotation_type, 'path_type': path_type,
               '_points': [_point(reader) for _ in range(count)],
-              'endpoint_projection': _point(reader), 'extrusion': _point(reader),
+              'origin': _point(reader), 'extrusion': _point(reader),
               'horizontal_direction': _point(reader),
-              'leader_offset_block_ref': _point(reader),
-              '_unknown_vector': _point(reader)}
-    if not r18 or annotation_type != 3:
+              'leader_offset_block_ref': _point(reader)}
+    result['endpoint_projection'] = _point(reader)
+    if version < b'AC1015':
+        result['dim_gap'] = reader.double()
+    # R2010+ leaders whose annotation is an MTEXT (type 0) or absent (type 3)
+    # no longer store the text box here.
+    if version < b'AC1024' or annotation_type not in (0, 3):
         result['text_height'], result['text_width'] = reader.double(), reader.double()
     result['hookline_direction'] = reader.bits(1)
     result['has_arrowhead'] = bool(reader.bits(1))
     result['_unknown_short'], result['_unknown_bits'] = 0, (0, 0)
-    if r18:
+    if version < b'AC1015':
+        # R13-R14 only: arrowhead type, DIMASZ, and a run of unknown flags.
+        result['arrowhead_type'] = reader.short()
+        result['arrow_size'] = reader.double()
+        result['_legacy_unknown'] = (reader.bits(1), reader.bits(1), reader.short(),
+                                     reader.short(), reader.bits(1), reader.bits(1))
+    elif r18:
         remaining = getattr(reader, 'limit', len(reader.data) * 8) - reader.pos
         if remaining >= 2:
             result['_unknown_short'] = reader.short()
@@ -362,7 +395,21 @@ def _region(reader, endbit):
             '_sat_data': sat_data.decode('latin1'), '_wireframe': wireframe}
 
 
-def _mtext(reader, *, split_string=False, r18=False, r2018=True, rect_height_present=True):
+def _cmc_color(reader):
+    """Read a CmColor (R2004+): BS index, BL RGB, RC flags, optional names."""
+    index = reader.short()
+    rgb = reader.long() & 0xFFFFFFFF
+    flags = reader.bits(8)
+    strings = getattr(reader, 'string_reader', None)
+    for bit in (1, 2):
+        if flags & bit:
+            if strings is None:
+                raise DwgFormatError('CMC color name requires the object string stream')
+            strings.text('utf-16le')
+    return index, rgb, flags
+
+
+def _mtext(reader, *, split_string=False, r18=False, legacy=False, r2018=True, rect_height_present=True):
     insert, extrusion, text_direction = _point(reader), _point(reader), _point(reader)
     width = reader.double()
     rect_height = reader.double() if r18 and rect_height_present else None
@@ -382,14 +429,23 @@ def _mtext(reader, *, split_string=False, r18=False, r2018=True, rect_height_pre
         if length < 0:
             raise DwgFormatError('negative MTEXT byte length')
         result['_text_bytes'] = reader.raw(length)
-    result['line_spacing_style'] = reader.short()
-    result['line_spacing_factor'] = reader.double()
-    reader.bits(1)  # R2000 reserved/unknown bit, before the handle stream.
+    if not legacy:
+        # R13/R14 have no line spacing; the field was introduced in R2000.
+        result['line_spacing_style'] = reader.short()
+        result['line_spacing_factor'] = reader.double()
+        reader.bits(1)  # R2000 reserved/unknown bit, before the handle stream.
     if r18:
         background_flags = reader.long()
         if background_flags & 0x11:
-            # None of the supplied AC1032 drawings uses an MTEXT background.
-            raise DwgFormatError('R2018 MTEXT background color is not implemented')
+            # ODA specification 20.4.46: scale factor, CmColor and
+            # transparency follow; 0x10 (text frame) uses them since R2018.
+            result['box_fill_scale'] = reader.double()
+            index, rgb, _flags = _cmc_color(reader)
+            result['bg_fill_color'] = index
+            if (rgb >> 24) in (0xC2, 0xC3):
+                result['bg_fill_true_color'] = rgb & 0xFFFFFF
+            result['bg_fill_transparency'] = reader.long() & 0xFF
+            result['bg_fill'] = background_flags & 0x13
         not_annotative = reader.bits(1) if r2018 else False
         if not_annotative:
             reader.short()  # version
@@ -447,21 +503,24 @@ def _insert(reader, *, r18=False):
     return result
 
 
-def decode_entity(type_code, reader, *, split_string=False, r18=False):
-    """Read supported R2000-specific data, leaving trailing handles untouched.
+def decode_entity(type_code, reader, *, split_string=False, r18=False, legacy=False,
+                  version=b'AC1015'):
+    """Read supported entity data, leaving trailing handles untouched.
 
+    ``legacy`` marks R13/R14 (AC1012/AC1014), whose common entity data and TEXT
+    payload differ from R2000; other entity payloads keep the R2000 field order.
     Reserved keys: _points carries LWPOLYLINE x/y/start-width/end-width/bulge;
     _text_bytes preserves source text bytes; _has_attribs selects INSERT tails.
     TEXT/MTEXT STYLE and INSERT BLOCK_HEADER handles follow common entity handles.
     """
     if type_code == 1:
-        return _text(reader, split_string=split_string)
+        return _text(reader, split_string=split_string, legacy=legacy)
     if type_code == 0x2c:
-        return _mtext(reader, split_string=split_string, r18=r18)
+        return _mtext(reader, split_string=split_string, r18=r18, legacy=legacy)
     if type_code == 7:
         return _insert(reader, r18=r18)
     if type_code == 0x2d:
-        return _leader(reader, r18=r18)
+        return _leader(reader, r18=r18, version=version)
     if type_code in (0x28, 0x29):
         return {'start': _point(reader), 'unit_vector': _point(reader)}
     if type_code == 0x2f:

@@ -161,8 +161,9 @@ def to_dxf_document(drawing: NativeDrawing):
         if handle not in drawing.blocks:
             raise DwgFormatError(f'missing block {handle:X}')
         block = drawing.blocks[handle]
-        if block.get('external') or block.get('xref_path'):
-            raise UnsupportedDwgError(f'external block reference: {block["name"]}')
+        # ODA writes cached external-reference blocks (including their xref path)
+        # instead of refusing the drawing; the DWG often stores the referenced
+        # geometry even when the block is flagged external.
         if drawing.unsupported_blocks.get(handle):
             raise UnsupportedDwgError(f'unimplemented block entities: {drawing.unsupported_blocks[handle]}')
         active.add(handle)
@@ -255,16 +256,18 @@ def to_dxf_document(drawing: NativeDrawing):
         elif kind.startswith('DIMENSION_'):
             block_handle = attributes.pop('geometry_block_handle')
             attributes.pop('dimstyle_handle')
-            if block_handle not in drawing.blocks:
-                raise DwgFormatError(f'missing dimension geometry block {block_handle:X}')
-            build_block(block_handle)
+            geometry_name = None
+            if block_handle:
+                if block_handle not in drawing.blocks:
+                    raise DwgFormatError(f'missing dimension geometry block {block_handle:X}')
+                build_block(block_handle)
+                geometry_name = output_block_names[block_handle]
             flags = attributes.pop('_flags1')
             base_type = {'DIMENSION_ORDINATE': 6, 'DIMENSION_LINEAR': 0,
                          'DIMENSION_ALIGNED': 1, 'DIMENSION_ANG2LN': 2,
                          'DIMENSION_DIAMETER': 3, 'DIMENSION_RADIUS': 4,
                          'DIMENSION_ANG3PT': 5}[kind]
-            dimension = dict(geometry=output_block_names[block_handle],
-                             dimstyle='Standard', dimtype=base_type | (32 if flags & 2 else 0)
+            dimension = dict(dimstyle='Standard', dimtype=base_type | (32 if flags & 2 else 0)
                              | (0 if flags & 1 else 128),
                              defpoint=attributes['defpoint'],
                              text_midpoint=attributes['text_midpoint'],
@@ -275,6 +278,8 @@ def to_dxf_document(drawing: NativeDrawing):
                              line_spacing_factor=attributes['line_spacing_factor'],
                              horizontal_direction=attributes['horizontal_direction'],
                              text_rotation=attributes['text_rotation'])
+            if geometry_name is not None:
+                dimension['geometry'] = geometry_name
             for source, target_name in (('defpoint2', 'defpoint2'),
                                         ('defpoint3', 'defpoint3'),
                                         ('defpoint4', 'defpoint4'),
@@ -342,8 +347,9 @@ def to_dxf_document(drawing: NativeDrawing):
             annotation_handle = attributes.pop('annotation_handle')
             points = attributes.pop('_points')
             attributes.pop('dimstyle_handle')
-            attributes.pop('endpoint_projection')
-            attributes.pop('_unknown_vector')
+            for key in ('origin', 'endpoint_projection', 'dim_gap', 'arrowhead_type',
+                        'arrow_size', '_legacy_unknown'):
+                attributes.pop(key, None)
             attributes.pop('_unknown_short')
             attributes.pop('_unknown_bits')
             attributes['normal_vector'] = attributes.pop('extrusion')
