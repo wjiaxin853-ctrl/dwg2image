@@ -555,4 +555,10 @@ def read_dwg(source: str | Path) -> NativeDrawing:
     if signature in (b'AC1018', b'AC1021', b'AC1024', b'AC1027', b'AC1032'):
         from ._native_r18_reader import read_r18_dwg
         return read_r18_dwg(source)
+    if signature in (b'AC1009', b'AC1006', b'AC1004', b'AC1003', b'AC2.10'):
+        from ._native_pre13 import read_pre13
+        return read_pre13(source)
+    if signature == b'AC1.40':
+        from ._native_pre13 import read_pre2_empty
+        return read_pre2_empty(source)
     return _read_ac1015_dwg(source)
