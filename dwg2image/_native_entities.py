@@ -44,22 +44,26 @@ def _text(reader, *, split_string=False):
     return result
 
 
-def decode_attribute(type_code, reader, encoding, *, split_string=False, r18=False):
+def decode_attribute(type_code, reader, encoding, *, split_string=False, version=b'AC1015'):
     result = _text(reader, split_string=split_string)
+    if version >= b'AC1024':
+        reader.bits(8)  # attribute record version
+    if version >= b'AC1032' and reader.bits(8) not in (0, 1):
+        raise DwgFormatError('embedded multiline ATTRIB or ATTDEF is unsupported')
     result.update(tag=reader.text(encoding), field_length=reader.short(),
                   flags=reader.bits(8))
-    if type_code == 3:
-        result['prompt'] = reader.text(encoding)
-    if r18:
-        if type_code == 3:
-            reader.bits(8)  # R2010 attribute-definition version
+    if version >= b'AC1021':
         result['lock_position'] = reader.bits(1)
+    if type_code == 3:
+        if version >= b'AC1024':
+            reader.bits(8)  # attribute definition version
+        result['prompt'] = reader.text(encoding)
     return result
 
 
-def _lwpolyline(reader):
+def _lwpolyline(reader, *, vertex_ids_present=False):
     flags = reader.short()
-    result = {'flags': (1 if flags & 512 else 0) | (128 if flags & 128 else 0)}
+    result = {'flags': (1 if flags & 512 else 0) | (128 if flags & 256 else 0)}
     if flags & 4:
         result['const_width'] = reader.double()
     if flags & 8:
@@ -70,8 +74,9 @@ def _lwpolyline(reader):
         result['extrusion'] = _point(reader)
     count = reader.long()
     bulges = reader.long() if flags & 16 else 0
+    ids = reader.long() if vertex_ids_present and flags & 1024 else 0
     widths = reader.long() if flags & 32 else 0
-    if min(count, bulges, widths) < 0 or bulges > count or widths > count:
+    if min(count, bulges, ids, widths) < 0 or max(bulges, ids, widths) > count:
         raise DwgFormatError('invalid LWPOLYLINE array lengths')
     # Each following point consumes at least two 2-bit default codes.
     if count > (len(reader.data) * 8 - reader.pos) // 4:
@@ -85,6 +90,8 @@ def _lwpolyline(reader):
             points.append([x, y, 0.0, 0.0, 0.0])
     for index in range(bulges):
         points[index][4] = reader.double()
+    if ids:
+        result['_vertex_ids'] = [reader.long() for _ in range(ids)]
     for index in range(widths):
         points[index][2] = reader.double()
         points[index][3] = reader.double()
@@ -214,6 +221,77 @@ def _leader(reader, *, r18=False):
     return result
 
 
+def decode_helix(reader, *, r2013_plus=False):
+    result = _spline(reader, r18=r2013_plus)
+    result['_helix'] = {
+        'major_release_number': reader.long(),
+        'maintenance_release_number': reader.long(),
+        'axis_base_point': _point(reader),
+        'start_point': _point(reader),
+        'axis_vector': _point(reader),
+        'radius': reader.double(), 'turns': reader.double(), 'turn_height': reader.double(),
+        'handedness': reader.bits(1), 'constrain': reader.bits(8),
+    }
+    return result
+
+
+def _mline(reader):
+    scale, justification = reader.double(), reader.bits(8)
+    start, extrusion = _point(reader), _point(reader)
+    flags, element_count, count = reader.short(), reader.bits(8), reader.short()
+    if count < 2 or not element_count or count > (len(reader.data) * 8 - reader.pos) // 18:
+        raise DwgFormatError('invalid MLINE vertex or element count')
+
+    def parameters():
+        size = reader.short()
+        if size < 0 or size > (len(reader.data) * 8 - reader.pos) // 2:
+            raise DwgFormatError('invalid MLINE parameter count')
+        return tuple(reader.double() for _ in range(size))
+
+    vertices = []
+    for _ in range(count):
+        location, line, miter = _point(reader), _point(reader), _point(reader)
+        elements = [(parameters(), parameters()) for _ in range(element_count)]
+        vertices.append((location, line, miter, elements))
+    if vertices[0][0] != start:
+        raise DwgFormatError('MLINE start does not match its first vertex')
+    return {'scale_factor': scale, 'justification': justification, 'extrusion': extrusion,
+            'flags': flags, 'style_element_count': element_count, '_vertices': vertices}
+
+
+def read_mline_style(reader, text, *, true_color=False, handle_linetypes=False):
+    def color():
+        index = reader.short()
+        if not true_color:
+            return index
+        raw_color = reader.long() & 0xFFFFFFFF
+        flags = reader.bits(8)
+        if flags & 1:
+            text()
+        if flags & 2:
+            text()
+        return {0xC0: 256, 0xC1: 0, 0xC3: raw_color & 255}.get(raw_color >> 24)
+
+    name, description = text(), text()
+    dwg_flags = reader.short()
+    flags = dwg_flags & 272
+    for source, dest in ((1, 2), (2, 1), (32, 64), (64, 32), (512, 1024), (1024, 512)):
+        if dwg_flags & source:
+            flags |= dest
+    fill, start, end = color(), math.degrees(reader.double()), math.degrees(reader.double())
+    elements = [(reader.double(), color(), None if handle_linetypes else reader.short())
+                for _ in range(reader.bits(8))]
+    return {'name': name, 'description': description, 'flags': flags,
+            'fill_color': fill, 'start_angle': start, 'end_angle': end, 'elements': elements}
+
+
+def attach_mline_styles(entities, styles):
+    for entity in entities:
+        if entity['type'] == 'MLINE':
+            attributes = entity['attributes']
+            attributes['_style'] = styles.get(attributes.pop('mline_style_handle'))
+
+
 def _region(reader, endbit):
     empty = bool(reader.bits(1))
     unknown = reader.bits(1)
@@ -284,10 +362,10 @@ def _region(reader, endbit):
             '_sat_data': sat_data.decode('latin1'), '_wireframe': wireframe}
 
 
-def _mtext(reader, *, split_string=False, r18=False):
+def _mtext(reader, *, split_string=False, r18=False, r2018=True, rect_height_present=True):
     insert, extrusion, text_direction = _point(reader), _point(reader), _point(reader)
     width = reader.double()
-    rect_height = reader.double() if r18 else None
+    rect_height = reader.double() if r18 and rect_height_present else None
     char_height = reader.double()
     attachment_point, flow_direction = reader.short(), reader.short()
     extents_height, extents_width = reader.double(), reader.double()
@@ -295,7 +373,7 @@ def _mtext(reader, *, split_string=False, r18=False):
               'text_direction': text_direction, 'width': width,
               'char_height': char_height, 'attachment_point': attachment_point,
               'flow_direction': flow_direction,
-              'rect_height': rect_height if r18 else extents_height,
+              'rect_height': extents_height if rect_height is None else rect_height,
               'rect_width': width if r18 else extents_width}
     if split_string:
         result['_text_bytes'] = reader.text().encode('utf-8')
@@ -312,7 +390,7 @@ def _mtext(reader, *, split_string=False, r18=False):
         if background_flags & 0x11:
             # None of the supplied AC1032 drawings uses an MTEXT background.
             raise DwgFormatError('R2018 MTEXT background color is not implemented')
-        not_annotative = reader.bits(1)
+        not_annotative = reader.bits(1) if r2018 else False
         if not_annotative:
             reader.short()  # version
             reader.bits(1)  # default flag
@@ -384,6 +462,10 @@ def decode_entity(type_code, reader, *, split_string=False, r18=False):
         return _insert(reader, r18=r18)
     if type_code == 0x2d:
         return _leader(reader, r18=r18)
+    if type_code in (0x28, 0x29):
+        return {'start': _point(reader), 'unit_vector': _point(reader)}
+    if type_code == 0x2f:
+        return _mline(reader)
     decoder = {0x1f: _solid, 0x20: _solid, 0x23: _ellipse,
                0x24: _spline, 0x4d: _lwpolyline}.get(type_code)
     return decoder(reader) if decoder else None

@@ -76,11 +76,14 @@ class _BoundedReader(BitReader):
 
 
 class _ObjectReader(_BoundedReader):
-    def __init__(self, data, start, limit, string_reader):
+    def __init__(self, data, start, limit, string_reader, inline_encoding=None):
         super().__init__(data, start, limit)
         self.string_reader = string_reader
+        self.inline_encoding = inline_encoding
 
     def text(self, encoding='utf-16le'):
+        if self.inline_encoding is not None:
+            return super().text(self.inline_encoding)
         if self.string_reader is None:
             return ''
         length = self.string_reader.short()
@@ -103,6 +106,9 @@ class R18Object:
     data_end: int
     strings_present: bool
     crc_ok: bool
+    r2013_plus: bool
+    r2018_plus: bool
+    version: bytes
 
 
 def _object_type(reader):
@@ -114,9 +120,73 @@ def _object_type(reader):
     return reader.bits(16)
 
 
-def _record(data, offset, expected_handle):
+def _string_stream(body, data_start, end):
+    if end <= data_start:
+        raise DwgFormatError('missing DWG string-stream flag')
+    flag = _BoundedReader(body, end - 1, end).bits(1)
+    if not flag:
+        return end - 1, None
+    size_offset = end - 17
+    size = int.from_bytes(_BoundedReader(body, size_offset, end - 1).raw(2), 'little')
+    if size & 0x8000:
+        high = int.from_bytes(_BoundedReader(body, size_offset - 16, size_offset).raw(2), 'little')
+        size = (size & 0x7FFF) | (high << 15)
+        size_offset -= 16
+    start = size_offset - size
+    if start < data_start:
+        raise DwgFormatError('DWG string stream overlaps record data')
+    return start, _BoundedReader(body, start, size_offset)
+
+
+def read_section_classes(data, raw, inline_encoding):
+    """Read dynamic class IDs from the drawing's Classes section."""
+    version = data[:6]
+    if len(raw) < 38 or raw[:16] != bytes.fromhex('8da1c4b8c4a9f8c5c0dcf45fe7cfb68a'):
+        raise DwgFormatError('invalid DWG classes section')
+    payload_offset = 24 if version == b'AC1032' or (version >= b'AC1024' and data[11] > 3) else 20
+    payload_end = payload_offset + struct.unpack_from('<I', raw, 16)[0]
+    if payload_end + 18 > len(raw) or crc16(raw[16:payload_end]) != int.from_bytes(raw[payload_end:payload_end + 2], 'little'):
+        raise DwgFormatError('DWG classes section CRC or length is invalid')
+    header = _BoundedReader(raw, payload_offset * 8, payload_end * 8)
+    strings = None
+    if version >= b'AC1021':
+        start = header.pos
+        end = start + int.from_bytes(header.raw(4), 'little')
+        if end > payload_end * 8:
+            raise DwgFormatError('DWG classes stream exceeds section')
+        data_end, strings = _string_stream(raw, header.pos, end)
+        header.limit = data_end
+    maximum = header.short()
+    header.raw(2)
+    header.bits(1)
+    reader = _ObjectReader(raw, header.pos, header.limit, strings, inline_encoding)
+    classes = {}
+    for _ in range(maximum - 499):
+        number = reader.short()
+        reader.short()  # proxy flags
+        reader.text()  # application
+        reader.text()  # C++ name
+        name = reader.text()
+        reader.bits(1)  # proxy/zombie flag
+        item_type = reader.short()
+        for _ in range(5):
+            reader.long()
+        if number < 500 or number > maximum or number in classes or item_type not in (0x1F2, 0x1F3):
+            raise DwgFormatError('invalid DWG class identity')
+        classes[number] = (name, item_type == 0x1F2)
+    if reader.limit - reader.pos > (7 if inline_encoding is not None else 0):
+        raise DwgFormatError('unparsed DWG class data')
+    if strings is not None and strings.pos != strings.limit:
+        raise DwgFormatError('unparsed DWG class strings')
+    return classes
+
+
+def _record(data, offset, expected_handle, version, inline_encoding):
     size, position = _modular_short(data, offset, len(data))
-    handle_bits, body_start = modular(data, position, len(data))
+    if version >= b'AC1024':
+        handle_bits, body_start = modular(data, position, len(data))
+    else:
+        handle_bits, body_start = 0, position
     body_end = body_start + size
     if (size < 2 or body_end + 2 > len(data)
             or handle_bits > size * 8):
@@ -128,7 +198,12 @@ def _record(data, offset, expected_handle):
     body = data[body_start:body_end]
     prehandle_end = size * 8 - handle_bits
     header = _BoundedReader(body, 0, prehandle_end)
-    kind = _object_type(header)
+    if version >= b'AC1024':
+        kind = _object_type(header)
+    else:
+        kind = header.short()
+        prehandle_end = int.from_bytes(header.raw(4), 'little')
+        header = _BoundedReader(body, header.pos, prehandle_end)
     code, raw_handle = header.handle()
     own_handle = resolve_handle((code, raw_handle), expected_handle)
     if own_handle != expected_handle:
@@ -143,45 +218,31 @@ def _record(data, offset, expected_handle):
         eed_size = header.short()
     data_start = header.pos
 
-    strings_present = False
-    data_end = prehandle_end - 1
-    string_reader = None
-    if prehandle_end > 0:
-        strings_present = _BoundedReader(body, prehandle_end - 1, prehandle_end).bits(1) == 1
-    if strings_present:
-        if prehandle_end < 17:
-            raise DwgFormatError(f'truncated R2010 string-stream trailer at {offset:#x}')
-        size_reader = _BoundedReader(body, prehandle_end - 17, prehandle_end - 1)
-        stream_size = int.from_bytes(size_reader.raw(2), 'little')
-        trailer_bits = 17
-        if stream_size & 0x8000:
-            if prehandle_end < 33:
-                raise DwgFormatError(f'truncated R2010 large string-stream trailer at {offset:#x}')
-            high_reader = _BoundedReader(body, prehandle_end - 33, prehandle_end - 17)
-            high_size = int.from_bytes(high_reader.raw(2), 'little')
-            stream_size = (stream_size & 0x7FFF) | (high_size << 15)
-            trailer_bits = 33
-        string_end = prehandle_end - trailer_bits
-        string_start = string_end - stream_size
-        if string_start < data_start:
-            raise DwgFormatError(f'R2010 string stream overlaps object header at {offset:#x}')
-        data_end = string_start
-        string_reader = _BoundedReader(body, string_start, string_end)
-    elif data_end < data_start:
-        raise DwgFormatError(f'R2010 object header exceeds data stream at {offset:#x}')
+    data_end, string_reader = (prehandle_end, None)
+    if inline_encoding is None:
+        data_end, string_reader = _string_stream(body, data_start, prehandle_end)
 
     handle_reader = _BoundedReader(body, prehandle_end, size * 8)
     return R18Object(
         handle=expected_handle, kind=kind, offset=offset, size=size, body=body,
-        data_reader=_ObjectReader(body, data_start, data_end, string_reader),
+        data_reader=_ObjectReader(body, data_start, data_end, string_reader, inline_encoding),
         handle_reader=handle_reader, data_start=data_start,
-        data_end=data_end, strings_present=strings_present, crc_ok=True)
+        data_end=data_end, strings_present=string_reader is not None, crc_ok=True,
+        r2013_plus=version >= b'AC1027', r2018_plus=version >= b'AC1032', version=version)
 
 
 def read_r18_objects(data, sections):
-    """Read R2010+ object envelopes from an already decoded R18 section map."""
-    if data[:6] not in (b'AC1027', b'AC1032'):
-        raise DwgFormatError('R2010 object records require AC1027 or AC1032')
+    """Read object envelopes from already decoded section data."""
+    version = data[:6]
+    if version not in (b'AC1018', b'AC1021', b'AC1024', b'AC1027', b'AC1032'):
+        raise DwgFormatError(f'unsupported section-based DWG object version: {version!r}')
+    inline_encoding = None
+    if version == b'AC1018':
+        from .native import _CODEPAGES, UnsupportedDwgError
+        codepage = int.from_bytes(data[19:21], 'little')
+        if codepage not in _CODEPAGES:
+            raise UnsupportedDwgError(f'unimplemented DWG text codepage {codepage}')
+        inline_encoding = _CODEPAGES[codepage]
     by_name = {section['name']: section for section in sections.values()}
     try:
         object_data = by_name['AcDb:AcDbObjects']['data']
@@ -195,5 +256,5 @@ def read_r18_objects(data, sections):
     for handle, offset in records:
         if offset in result:
             raise DwgFormatError(f'duplicate R2010 object offset {offset:#x}')
-        result[offset] = _record(object_data, offset, handle)
+        result[offset] = _record(object_data, offset, handle, version, inline_encoding)
     return records, result

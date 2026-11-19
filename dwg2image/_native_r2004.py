@@ -5,7 +5,7 @@ import zlib
 from ._native_bits import DwgFormatError
 
 
-_SIGNATURES = {b'AC1018', b'AC1021', b'AC1024', b'AC1027', b'AC1032'}
+_SIGNATURES = {b'AC1018', b'AC1024', b'AC1027', b'AC1032'}
 _FILE_ID = b'AcFssFcAJMB\0'
 _DATA_PAGE_MAGIC = 0x4163043B
 _PAGE_MAP_MAGIC = 0x41630E3B
@@ -208,7 +208,7 @@ def _sections_map(raw):
             raise DwgFormatError('duplicate or invalid R2004 section description')
         if compressed not in (1, 2):
             _unsupported(f'R2004 section compression {compressed} is unsupported')
-        if encrypted:
+        if encrypted and name != 'AcDb:FileDepList':
             _unsupported(f'encrypted R2004 section {name!r} is unsupported')
         pages = []
         for _ in range(page_count):
@@ -220,7 +220,7 @@ def _sections_map(raw):
         names.add(name)
         sections.append({'id': section_id, 'name': name, 'size': size,
                          'page_size': page_size, 'compressed': compressed,
-                         'pages': pages})
+                         'encrypted': encrypted, 'pages': pages})
     if pos != len(raw):
         raise DwgFormatError('trailing bytes in R2004 data section map')
     return sections
@@ -284,6 +284,9 @@ def read_r18_sections(data):
                                section_map_extent)
     sections = _sections_map(section_map)
     for section in sections:
+        if section['encrypted']:
+            # FileDepList is not consumed by the drawing reader.
+            continue
         output = bytearray(section['size'])
         cursor = 0
         for reference in section['pages']:
@@ -303,4 +306,4 @@ def read_r18_sections(data):
             output[start:start + logical_size] = page_data[:logical_size]
             cursor = start + section['page_size']
         section['data'] = bytes(output)
-    return {section['id']: section for section in sections}
+    return {section['id']: section for section in sections if not section['encrypted']}

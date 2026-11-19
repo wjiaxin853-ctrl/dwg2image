@@ -95,6 +95,8 @@ def _solid_edges(sab_data):
 def to_dxf_document(drawing: NativeDrawing):
     """Build a new DXF from supported modelspace and reachable block content."""
     import ezdxf
+    from ezdxf.entities.mline import MLineStyleElements, MLineVertex
+    from ezdxf.math import Vec3
 
     if drawing.unsupported_modelspace:
         raise UnsupportedDwgError(f'unimplemented modelspace entities: {drawing.unsupported_modelspace}')
@@ -159,6 +161,8 @@ def to_dxf_document(drawing: NativeDrawing):
         if handle not in drawing.blocks:
             raise DwgFormatError(f'missing block {handle:X}')
         block = drawing.blocks[handle]
+        if block.get('external') or block.get('xref_path'):
+            raise UnsupportedDwgError(f'external block reference: {block["name"]}')
         if drawing.unsupported_blocks.get(handle):
             raise UnsupportedDwgError(f'unimplemented block entities: {drawing.unsupported_blocks[handle]}')
         active.add(handle)
@@ -219,7 +223,9 @@ def to_dxf_document(drawing: NativeDrawing):
             points = attributes.pop('_points')
             target = layout.add_polyline3d(
                 points, close=bool(attributes['flags'] & 1), dxfattribs=attributes)
-        elif kind == 'SPLINE':
+        elif kind in ('SPLINE', 'HELIX'):
+            # The stored spline already describes the full helix geometry.
+            attributes.pop('_helix', None)
             scenario = attributes.pop('scenario')
             degree = attributes.pop('degree')
             if scenario == 2:
@@ -282,11 +288,44 @@ def to_dxf_document(drawing: NativeDrawing):
             attributes = dimension
         if kind == 'LWPOLYLINE':
             points = attributes.pop('_points')
+            attributes.pop('_vertex_ids', None)
             target = layout.add_lwpolyline(points, format='xyseb',
                                   close=bool(attributes['flags'] & 1), dxfattribs=attributes)
         elif kind == 'MTEXT':
             text = attributes.pop('text')
             target = layout.add_mtext(text, dxfattribs=attributes)
+        elif kind == 'MLINE':
+            vertices = attributes.pop('_vertices')
+            source_style = attributes.pop('_style')
+            if source_style is None or len(source_style['elements']) != attributes['style_element_count']:
+                raise UnsupportedDwgError('MLINE references a missing or incompatible style')
+            style = dict(source_style)
+            name = style.pop('name')
+            elements = style.pop('elements')
+            if style['fill_color'] is None or any(color is None for _, color, _ in elements):
+                raise UnsupportedDwgError('MLINESTYLE true color is unsupported')
+            if name not in document.mline_styles:
+                document.mline_styles.new(name)
+            target_style = document.mline_styles.get(name)
+            target_style.update_dxf_attribs(style)
+            target_style.elements = MLineStyleElements()
+            for offset, color, pattern in elements:
+                if isinstance(pattern, int):
+                    pattern = {32767: 'BYLAYER', 32766: 'BYBLOCK'}.get(pattern)
+                if pattern is None or (pattern.upper() not in ('BYLAYER', 'BYBLOCK')
+                                       and pattern not in document.linetypes):
+                    raise UnsupportedDwgError('MLINESTYLE references an unsupported linetype')
+                target_style.elements.append(offset, color, pattern)
+            attributes.update(style_name=name, style_handle=target_style.dxf.handle)
+            target = layout.new_entity('MLINE', dxfattribs=attributes)
+            for location, line, miter, parameters in vertices:
+                vertex = MLineVertex()
+                vertex.location = Vec3(location)
+                vertex.line_direction = Vec3(line)
+                vertex.miter_direction = Vec3(miter)
+                vertex.line_params = [line_params for line_params, _ in parameters]
+                vertex.fill_params = [fill_params for _, fill_params in parameters]
+                target.vertices.append(vertex)
         elif kind == 'ATTDEF':
             tag = attributes.pop('tag')
             prompt = attributes.pop('prompt')
@@ -375,7 +414,7 @@ def to_dxf_document(drawing: NativeDrawing):
                 target.set_pattern_definition(lines)
             if seeds:
                 target.set_seed_points(seeds)
-        elif kind in ('POLYLINE_3D', 'SPLINE'):
+        elif kind in ('POLYLINE_3D', 'SPLINE', 'HELIX'):
             pass
         else:
             target = layout.new_entity('DIMENSION' if kind.startswith('DIMENSION_') else kind,

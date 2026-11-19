@@ -117,10 +117,17 @@ def modular(data: bytes, position: int, end: int, *, signed=False) -> tuple[int,
     raise DwgFormatError("unterminated modular integer")
 
 
+def _crc16_byte(value: int) -> int:
+    for _ in range(8):
+        value = (value >> 1) ^ (0xA001 if value & 1 else 0)
+    return value
+
+
+_CRC16_TABLE = tuple(_crc16_byte(byte) for byte in range(256))
+
+
 def crc16(data: bytes) -> int:
     crc = 0xC0C1
     for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ (0xA001 if crc & 1 else 0)
+        crc = (crc >> 8) ^ _CRC16_TABLE[(crc ^ byte) & 0xFF]
     return crc

@@ -14,7 +14,7 @@ class R18Block:
     flag64: int
     xref_index_plus_one: int
     xref_dependent: int
-    flags: tuple[int, int, int, int]
+    flags: tuple[int, ...]
     owned_handles: list[int]
     block_entity_handle: int
     endblk_handle: int
@@ -36,12 +36,15 @@ def _read_block(record):
     if reactor_count < 0:
         raise DwgFormatError(f'negative reactor count in BLOCK_HEADER {record.handle:X}')
     xdictionary_missing = reader.bits(1)
+    if record.r2013_plus:
+        reader.bits(1)  # separate data-store flag
     name = reader.text()
-    flag64 = reader.bits(1)
+    inline_text = record.version == b'AC1018'
+    flag64 = reader.bits(1) if inline_text else 0
     xref_index = reader.short()
-    xref_dependent = reader.bits(1)
-    flags = tuple(reader.bits(1) for _ in range(4))
-    owned_count = reader.long()
+    xref_dependent = reader.bits(1) if inline_text else bool(xref_index & 256)
+    flags = tuple(reader.bits(1) for _ in range(5))
+    owned_count = 0 if any(flags[2:4]) else reader.long()
     if owned_count < 0:
         raise DwgFormatError(f'negative owned-object count in BLOCK_HEADER {record.handle:X}')
     base_point = tuple(reader.double() for _ in range(3))
@@ -58,9 +61,9 @@ def _read_block(record):
     if preview_size < 0:
         raise DwgFormatError(f'negative block preview size for handle {record.handle:X}')
     reader.skip(preview_size * 8)
-    insert_units = reader.short()
-    explodable = reader.bits(1)
-    block_scaling = reader.bits(8)
+    insert_units = reader.short() if not inline_text else 0
+    explodable = reader.bits(1) if not inline_text else 1
+    block_scaling = reader.bits(8) if not inline_text else 0
     if reader.pos != record.data_end:
         raise DwgFormatError(f'BLOCK_HEADER {record.handle:X}: data ends at '
                              f'{reader.pos}, expected {record.data_end}')

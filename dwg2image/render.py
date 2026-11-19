@@ -13,17 +13,25 @@ def dxf_to_png(source: str | Path, destination: str | Path, *,
     may affect appearance. Returns the destination Path.
     """
     import ezdxf
-    from ezdxf.addons.drawing.matplotlib import qsave
-    from ezdxf.addons.drawing.config import Configuration
+    destination = _png_destination(destination, dpi)
+    return _render_png(ezdxf.readfile(Path(source)), destination, dpi, background)
 
-    source, destination = Path(source), Path(destination)
+
+def _png_destination(destination, dpi):
+    destination = Path(destination)
     if destination.suffix.lower() != ".png":
         raise ValueError("destination must have a .png suffix")
     if not isinstance(dpi, int) or dpi <= 0:
         raise ValueError("dpi must be a positive integer")
     if destination.exists():
         raise FileExistsError(destination)
-    document = ezdxf.readfile(source)
+    return destination
+
+
+def _render_png(document, destination, dpi, background):
+    from ezdxf.addons.drawing.matplotlib import qsave
+    from ezdxf.addons.drawing.config import Configuration
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="dwg2image-png-") as directory:
         rendered = Path(directory) / "drawing.png"

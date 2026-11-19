@@ -34,20 +34,21 @@ class NativeDrawing:
 
 _TYPES = {1: 'TEXT', 7: 'INSERT', 17: 'ARC', 18: 'CIRCLE', 19: 'LINE',
           27: 'POINT', 31: 'SOLID', 32: 'TRACE', 35: 'ELLIPSE', 36: 'SPLINE',
-          44: 'MTEXT', 45: 'LEADER', 77: 'LWPOLYLINE'}
+          40: 'RAY', 41: 'XLINE', 44: 'MTEXT', 45: 'LEADER', 47: 'MLINE', 77: 'LWPOLYLINE'}
 _NAMES = {**_TYPES, 2: 'ATTRIB', 3: 'ATTDEF', 15: 'POLYLINE_2D', 16: 'POLYLINE_3D',
           20: 'DIMENSION_ORDINATE', 21: 'DIMENSION_LINEAR',
           22: 'DIMENSION_ALIGNED', 25: 'DIMENSION_RADIUS', 26: 'DIMENSION_DIAMETER',
           36: 'SPLINE', 37: 'REGION', 78: 'HATCH'}
 _ENTITY_TYPES = (set(range(1, 48)) - {42}) | {77, 78, 0x1F2}
-_CODEPAGES = {1: 'ascii', 30: 'cp1252', 38: 'cp932', 39: 'gbk', 40: 'cp949', 41: 'cp950'}
+_CODEPAGES = {1: 'ascii', 28: 'cp1250', 29: 'cp1251', 30: 'cp1252',
+              38: 'cp932', 39: 'gbk', 40: 'cp949', 41: 'cp950'}
 
 
 def _sections(data):
     if len(data) < 25:
         raise DwgFormatError('truncated DWG header')
-    if data[:6] != b'AC1015':
-        raise UnsupportedDwgError('native decoder currently requires AC1015 (R2000)')
+    if data[:6] not in (b'AC1012', b'AC1014', b'AC1015'):
+        raise UnsupportedDwgError(f'unimplemented DWG file signature {data[:6]!r}')
     count = struct.unpack_from('<I', data, 21)[0]
     if count > (len(data) - 25) // 9:
         raise DwgFormatError('section directory extends beyond file')
@@ -119,7 +120,7 @@ def _object_map(data, section):
     raise DwgFormatError('missing object-map terminator')
 
 
-def _object(data, address, expected_handle):
+def _object(data, address, expected_handle, classes):
     length = struct.unpack_from('<H', data, address)[0]
     start = address + 2
     if length & 0x8000:
@@ -137,9 +138,11 @@ def _object(data, address, expected_handle):
         raise DwgFormatError(f'object CRC mismatch at {address:#x}')
     reader = BitReader(data[start:end])
     kind = reader.short()
-    endbit = int.from_bytes(reader.raw(4), 'little')
+    legacy = data[:6] < b'AC1015'
+    if not legacy:
+        endbit = int.from_bytes(reader.raw(4), 'little')
     code, handle = reader.handle()
-    if code or handle != expected_handle or not reader.pos <= endbit <= length * 8:
+    if code or handle != expected_handle:
         raise DwgFormatError('object header identity or bit length mismatch')
     size = reader.short()
     while size:
@@ -148,27 +151,38 @@ def _object(data, address, expected_handle):
         reader.handle()
         reader.skip(size * 8)
         size = reader.short()
+    if legacy:
+        if kind in _ENTITY_TYPES or classes.get(kind, ('', False))[1]:
+            if reader.bits(1):
+                reader.skip(int.from_bytes(reader.raw(4), 'little') * 8)
+        endbit = int.from_bytes(reader.raw(4), 'little')
+    if not reader.pos <= endbit <= length * 8:
+        raise DwgFormatError('object data exceeds its declared bit length')
     return kind, reader, endbit
 
 
-def _common(reader):
-    if reader.bits(1):
+def _common(reader, legacy=False):
+    if not legacy and reader.bits(1):
         reader.skip(int.from_bytes(reader.raw(4), 'little') * 8)
     mode = reader.bits(2)
     reactors = reader.long()
     if mode == 3 or reactors < 0:
         raise DwgFormatError('invalid entity mode or reactor count')
+    linetype = 0 if not legacy or reader.bits(1) else 3
     no_links = reader.bits(1)
     color = reader.short()
     scale = reader.double()
-    linetype, plotstyle = reader.bits(2), reader.bits(2)
-    invisible, lineweight = reader.short(), reader.bits(8)
+    plotstyle = 0
+    if not legacy:
+        linetype, plotstyle = reader.bits(2), reader.bits(2)
+    invisible = reader.short()
+    lineweight = 28 if legacy else reader.bits(8)
     return dict(mode=mode, reactors=reactors, no_links=no_links, color=color,
                 ltscale=scale, linetype=linetype, plotstyle=plotstyle,
                 invisible=invisible, lineweight=lineweight)
 
 
-def _handles(reader, endbit, handle, common):
+def _handles(reader, endbit, handle, common, legacy=False):
     reader.pos = endbit
     owner = resolve_handle(reader.handle(), handle) if common['mode'] == 0 else None
     if common['reactors'] > (len(reader.data) * 8 - reader.pos) // 8:
@@ -176,18 +190,25 @@ def _handles(reader, endbit, handle, common):
     for _ in range(common['reactors']):
         reader.handle()
     reader.handle()  # extension dictionary
+    if legacy:
+        layer = resolve_handle(reader.handle(), handle)
+        linetype = resolve_handle(reader.handle(), handle) if common['linetype'] == 3 else None
     if not common['no_links']:
         reader.handle()
         reader.handle()
-    layer = resolve_handle(reader.handle(), handle)
-    linetype = resolve_handle(reader.handle(), handle) if common['linetype'] == 3 else None
+    if not legacy:
+        layer = resolve_handle(reader.handle(), handle)
+        linetype = resolve_handle(reader.handle(), handle) if common['linetype'] == 3 else None
     if common['plotstyle'] == 3:
         reader.handle()
     return owner, layer, linetype
 
 
-def _geometry(kind, reader):
-    if kind == 19:
+def _geometry(kind, reader, *, legacy=False):
+    if kind == 19 and legacy:
+        result = dict(start=tuple(reader.double() for _ in range(3)),
+                      end=tuple(reader.double() for _ in range(3)))
+    elif kind == 19:
         zero_z = reader.bits(1)
         x = reader.rd()
         end_x = reader.dd(x)
@@ -202,9 +223,9 @@ def _geometry(kind, reader):
         result = dict(location=tuple(reader.double() for _ in range(3)))
     else:
         from ._native_entities import decode_entity
-        return decode_entity(kind, reader)
-    result['thickness'] = 0.0 if reader.bits(1) else reader.double()
-    result['extrusion'] = (0.0, 0.0, 1.0) if reader.bits(1) else tuple(reader.double() for _ in range(3))
+        return decode_entity(kind, reader, legacy=legacy)
+    result['thickness'] = 0.0 if not legacy and reader.bits(1) else reader.double()
+    result['extrusion'] = (0.0, 0.0, 1.0) if not legacy and reader.bits(1) else tuple(reader.double() for _ in range(3))
     if kind == 17:
         result['start_angle'] = math.degrees(reader.double())
         result['end_angle'] = math.degrees(reader.double())
@@ -213,13 +234,16 @@ def _geometry(kind, reader):
     return result
 
 
-def _layer(reader, encoding, endbit, handle):
+def _layer(reader, encoding, endbit, handle, legacy=False):
     reactors = reader.long()
     name = reader.text(encoding)
     reader.bits(1)
     reader.short()  # external-reference index
     reader.bits(1)
-    flags = reader.short()
+    if legacy:
+        flags = sum(reader.bits(1) << bit for bit in range(4)) | 16
+    else:
+        flags = reader.short()
     color = reader.short()
     if reader.pos != endbit:
         raise DwgFormatError('layer data bit length mismatch')
@@ -228,7 +252,8 @@ def _layer(reader, encoding, endbit, handle):
         reader.handle()
     reader.handle()  # extension dictionary
     reader.handle()  # external reference
-    reader.handle()  # plotstyle
+    if not legacy:
+        reader.handle()  # plotstyle
     linetype = resolve_handle(reader.handle(), handle)
     return dict(name=name, flags=flags, color=color, linetype_handle=linetype)
 
@@ -276,9 +301,11 @@ def _linetype(reader, encoding, endbit):
                 dot_shapes=complex_pattern and dot_shapes)
 
 
-def _block(reader, encoding):
+def _block(reader, encoding, legacy=False):
     name = _table_prefix(reader, encoding)
-    anonymous, attributes, external, overlay, loaded = [reader.bits(1) for _ in range(5)]
+    anonymous, attributes, external, overlay = [reader.bits(1) for _ in range(4)]
+    if not legacy:
+        reader.bits(1)  # loaded
     base_point = tuple(reader.double() for _ in range(3))
     return dict(name=name, base_point=base_point, external=bool(external or overlay),
                 path=reader.text(encoding))
@@ -291,6 +318,8 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
     No object is guessed from preview pixels or pre-existing DXF output.
     """
     data = Path(source).read_bytes()
+    version = data[:6]
+    legacy = version < b'AC1015'
     sections = _sections(data)
     if 1 not in sections or 2 not in sections:
         raise DwgFormatError('missing classes or object map section')
@@ -300,6 +329,7 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
     encoding = _CODEPAGES[page]
     classes = _classes(data, sections[1], encoding)
     entities, layers, styles, linetypes, blocks = [], {}, {}, {}, {}
+    mline_styles = {}
     vertices_by_handle = {}
     attributes_by_owner = {}
     unsupported = Counter()
@@ -307,9 +337,9 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
     count = 0
     for handle, address in _object_map(data, sections[2]):
         count += 1
-        kind, reader, endbit = _object(data, address, handle)
+        kind, reader, endbit = _object(data, address, handle, classes)
         if kind == 51:
-            layers[handle] = _layer(reader, encoding, endbit, handle)
+            layers[handle] = _layer(reader, encoding, endbit, handle, legacy)
             continue
         if kind == 57:
             linetypes[handle] = _linetype(reader, encoding, endbit)
@@ -317,18 +347,25 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
         if kind == 53:
             styles[handle] = _style(reader, encoding)
             continue
+        if kind == 73:
+            from ._native_entities import read_mline_style
+            reader.long()  # reactor count
+            mline_styles[handle] = read_mline_style(reader, lambda: reader.text(encoding))
+            if reader.pos != endbit:
+                raise DwgFormatError(f'MLINESTYLE {handle:X}: invalid data length')
+            continue
         if kind == 49:
-            blocks[handle] = _block(reader, encoding)
+            blocks[handle] = _block(reader, encoding, legacy)
             continue
         if kind in (4, 5, 6):
             continue  # BLOCK/ENDBLK/SEQEND are structural markers
         if kind in (10, 11):
-            common = _common(reader)
+            common = _common(reader, legacy)
             from ._native_entities import decode_vertex2d, decode_vertex3d
             vertex = decode_vertex2d(reader) if kind == 10 else decode_vertex3d(reader)
             if reader.pos != endbit:
                 raise DwgFormatError(f'vertex {handle:X}: data ends at {reader.pos}, expected {endbit}')
-            owner, _, _ = _handles(reader, endbit, handle, common)
+            owner, _, _ = _handles(reader, endbit, handle, common, legacy)
             if owner is not None:
                 vertex['handle'] = handle
                 vertex['owner'] = owner
@@ -337,20 +374,23 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             continue
         if kind not in _ENTITY_TYPES and not classes.get(kind, ('', False))[1]:
             continue
-        common = _common(reader)
+        common = _common(reader, legacy)
         name = _NAMES.get(kind, classes.get(kind, (f'TYPE_{kind:X}', True))[0])
         if name == 'HATCH':
             from ._native_hatch import decode_hatch
             attributes = decode_hatch(reader)
         elif kind in (2, 3):
             from ._native_entities import decode_attribute
-            attributes = decode_attribute(kind, reader, encoding)
+            attributes = decode_attribute(kind, reader, encoding, version=version)
+        elif name == 'HELIX':
+            from ._native_entities import decode_helix
+            attributes = decode_helix(reader)
         elif kind == 37:
             from ._native_entities import _region
             attributes = _region(reader, endbit)
         elif kind in (20, 21, 22, 25, 26):
             from ._native_dimension import decode_dimension
-            attributes = decode_dimension(kind, reader)
+            attributes = decode_dimension(kind, reader, version=version)
         elif kind == 15:
             from ._native_entities import _polyline2d
             attributes = _polyline2d(reader)
@@ -358,7 +398,7 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             from ._native_entities import _polyline3d
             attributes = _polyline3d(reader)
         else:
-            attributes = _geometry(kind, reader) if kind in _TYPES else None
+            attributes = _geometry(kind, reader, legacy=legacy) if kind in _TYPES else None
         if attributes is None:
             if common['mode'] == 2:
                 unsupported[name] += 1
@@ -369,7 +409,7 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             continue
         if reader.pos != endbit:
             raise DwgFormatError(f'{name} {handle:X}: entity data ends at {reader.pos}, expected {endbit}')
-        owner, layer, linetype = _handles(reader, endbit, handle, common)
+        owner, layer, linetype = _handles(reader, endbit, handle, common, legacy)
         if '_text_bytes' in attributes:
             attributes['text'] = attributes.pop('_text_bytes').removesuffix(b'\x00').decode(encoding)
         if name == 'HATCH':
@@ -388,6 +428,8 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
         elif kind == 45:
             attributes['annotation_handle'] = resolve_handle(reader.handle(), handle)
             attributes['dimstyle_handle'] = resolve_handle(reader.handle(), handle)
+        elif kind == 47:
+            attributes['mline_style_handle'] = resolve_handle(reader.handle(), handle)
         elif kind in (15, 16):
             attributes['first_vertex_handle'] = resolve_handle(reader.handle(), handle)
             attributes['last_vertex_handle'] = resolve_handle(reader.handle(), handle)
@@ -443,6 +485,8 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             ]
         else:
             attributes['_points'] = [vertex['location'] for vertex in vertices]
+    from ._native_entities import attach_mline_styles
+    attach_mline_styles(entities, mline_styles)
     return NativeDrawing(entities, layers, dict(unsupported), count, styles, linetypes, blocks,
                          {owner: dict(types) for owner, types in unsupported_blocks.items()})
 
@@ -450,8 +494,9 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
 def read_dwg(source: str | Path) -> NativeDrawing:
     """Read a supported DWG version without invoking a converter."""
     source = Path(source)
-    signature = source.read_bytes()[:6]
-    if signature == b'AC1032':
+    with source.open('rb') as stream:
+        signature = stream.read(6)
+    if signature in (b'AC1018', b'AC1021', b'AC1024', b'AC1027', b'AC1032'):
         from ._native_r18_reader import read_r18_dwg
         return read_r18_dwg(source)
     return _read_ac1015_dwg(source)

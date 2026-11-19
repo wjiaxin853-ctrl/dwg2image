@@ -8,24 +8,28 @@ def _object_prefix(record):
     if reactors < 0:
         raise DwgFormatError(f'negative reactor count in table record {record.handle:X}')
     xdictionary_missing = bool(reader.bits(1))
-    has_ds_data = bool(reader.bits(1))
+    has_ds_data = bool(reader.bits(1)) if record.r2013_plus else False
     return reader, reactors, xdictionary_missing, has_ds_data
 
 
 def _common_table(record, reader):
     name = reader.text()
+    if record.version == b'AC1018':
+        reader.bits(1)  # previously referenced
     xref_resolved = reader.short()
+    if record.version == b'AC1018':
+        reader.bits(1)  # depends on an xref
     return name, xref_resolved
 
 
-def _handles(record, reactors, xdictionary_missing, extra):
+def _handles(record, reactors, xdictionary_missing, extra, *, has_xref=True):
     reader = record.handle_reader
     owner = resolve_handle(reader.handle(), record.handle)
     for _ in range(reactors):
         resolve_handle(reader.handle(), record.handle)
     if not xdictionary_missing:
         resolve_handle(reader.handle(), record.handle)
-    xref = resolve_handle(reader.handle(), record.handle)
+    xref = resolve_handle(reader.handle(), record.handle) if has_xref else None
     values = [resolve_handle(reader.handle(), record.handle) for _ in range(extra)]
     if reader.limit - reader.pos > 7:
         raise DwgFormatError(f'table {record.handle:X}: unparsed handle data')
@@ -46,8 +50,13 @@ def _read_layer(record):
         raise DwgFormatError(f'LAYER {record.handle:X}: data ends at {reader.pos}, expected {record.data_end}')
     if reader.string_reader and reader.string_reader.pos != reader.string_reader.limit:
         raise DwgFormatError(f'LAYER {record.handle:X}: string stream is not fully consumed')
-    _, _, refs = _handles(record, reactors, xdictionary_missing, 4)
-    plotstyle, material, linetype, visualstyle = refs
+    has_material = record.version >= b'AC1021'
+    _, _, refs = _handles(record, reactors, xdictionary_missing,
+                          2 + has_material + record.r2013_plus)
+    plotstyle = refs[0]
+    material = refs[1] if has_material else None
+    linetype = refs[1 + has_material]
+    visualstyle = refs[-1] if record.r2013_plus else None
     if color_method == 0xC3:
         color_index = color_rgb & 0xFF
     if color_index == 0:
@@ -104,7 +113,9 @@ def _read_linetype(record):
         dot_shapes &= (flags == 4 and shape_code == 0 and x == 0 and y == 0
                        and scale == 1 and rotation == 0)
         dashes.append(length)
-    if any(flags & 2 for flags in shape_flags):
+    if record.version == b'AC1018':
+        reader.skip(256 * 8)
+    elif any(flags & 2 for flags in shape_flags):
         reader.skip(512 * 8)
     if reader.pos != record.data_end:
         raise DwgFormatError(f'LTYPE {record.handle:X}: data ends at {reader.pos}, expected {record.data_end}')
@@ -131,3 +142,24 @@ def read_r18_tables(objects):
         elif record.kind == 57:
             linetypes[record.handle] = _read_linetype(record)
     return layers, styles, linetypes
+
+
+def read_r18_mline_styles(objects, linetypes):
+    from ._native_entities import read_mline_style
+
+    result = {}
+    for record in objects.values():
+        if record.kind != 73:
+            continue
+        reader, reactors, xdictionary_missing, _ = _object_prefix(record)
+        style = read_mline_style(reader, reader.text, true_color=True,
+                                 handle_linetypes=record.r2018_plus)
+        if reader.pos != record.data_end:
+            raise DwgFormatError(f'MLINESTYLE {record.handle:X}: invalid data length')
+        count = len(style['elements']) if record.r2018_plus else 0
+        _, _, handles = _handles(record, reactors, xdictionary_missing, count, has_xref=False)
+        if record.r2018_plus:
+            style['elements'] = [(offset, color, linetypes.get(handle, {}).get('name'))
+                                 for (offset, color, _), handle in zip(style['elements'], handles)]
+        result[record.handle] = style
+    return result

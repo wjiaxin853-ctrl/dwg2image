@@ -12,11 +12,11 @@ def _point(reader):
     return tuple(reader.double() for _ in range(3))
 
 
-def decode_dimension(kind, reader, *, split_string=False, r18=False):
+def decode_dimension(kind, reader, *, split_string=False, version=b'AC1015'):
     """Read an R2000+ ordinate, linear, aligned, angular, or diameter body."""
     if kind not in (20, 21, 22, 23, 24, 25, 26):
         raise DwgFormatError(f'unsupported dimension type {kind}')
-    result = {'_version': reader.bits(8)} if r18 else {}
+    result = {'_version': reader.bits(8)} if version >= b'AC1024' else {}
     result.update({
         'extrusion': _point(reader),
         'text_midpoint': (reader.rd(), reader.rd()),
@@ -39,7 +39,7 @@ def decode_dimension(kind, reader, *, split_string=False, r18=False):
                   line_spacing_style=reader.short(),
                   line_spacing_factor=reader.double(),
                   actual_measurement=reader.double())
-    if r18:
+    if version >= b'AC1021':
         result['_unknown_r2007'] = reader.bits(1)
         result['_flip_arrow1'] = reader.bits(1)
         result['_flip_arrow2'] = reader.bits(1)

@@ -18,7 +18,7 @@ def inspect_dwg(path):
             {'id': ident, 'offset': offset, 'size': size}
             for ident, (offset, size) in _sections(data).items()
         ]
-    elif signature != 'AC1032':
+    elif signature not in ('AC1018', 'AC1021', 'AC1024', 'AC1027', 'AC1032'):
         raise ValueError(f'unexamined DWG signature: {signature!r}')
     return result
 

@@ -10,7 +10,8 @@ def read_r18_common(record):
     reader = record.data_reader
     graphic = reader.bits(1)
     if graphic:
-        size = int.from_bytes(reader.raw(4), 'little')
+        size_bytes = reader.bits(3) if record.version >= b'AC1024' else 4
+        size = int.from_bytes(reader.raw(size_bytes), 'little')
         reader.skip(size * 8)
 
     mode = reader.bits(2)
@@ -19,7 +20,7 @@ def read_r18_common(record):
         raise DwgFormatError(f'invalid R2010 entity mode or reactor count for {record.handle:X}')
 
     xdictionary_missing = reader.bits(1)
-    has_ds_data = reader.bits(1)
+    has_ds_data = reader.bits(1) if record.r2013_plus else 0
     raw_color = reader.short() & 0xFFFF
     color_flags = raw_color & 0xFF00
     color_index = raw_color & 0x01FF
@@ -32,9 +33,9 @@ def read_r18_common(record):
     ltscale = reader.double()
     linetype_flags = reader.bits(2)
     plotstyle_flags = reader.bits(2)
-    material_flags = reader.bits(2)
-    shadow_flags = reader.bits(8)
-    visualstyle_flags = tuple(reader.bits(1) for _ in range(3))
+    material_flags = reader.bits(2) if record.version >= b'AC1021' else 0
+    shadow_flags = reader.bits(8) if record.version >= b'AC1021' else 0
+    visualstyle_flags = tuple(reader.bits(1) for _ in range(3)) if record.version >= b'AC1024' else ()
     invisible = reader.short()
     lineweight = reader.bits(8)
     return {

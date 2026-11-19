@@ -1,4 +1,4 @@
-"""R2018 DWG object reader for the independently implemented backend."""
+"""Object reader for section-based DWG versions starting at R2004."""
 from collections import Counter
 from pathlib import Path
 
@@ -8,8 +8,8 @@ from ._native_r18_entities import (
     decode_wipeout, read_r18_common, read_r18_common_handles,
 )
 from ._native_r18_acds import read_acds_sab_records
-from ._native_r18_objects import read_r18_objects
-from ._native_r18_tables import read_r18_tables
+from ._native_r18_objects import read_r18_objects, read_section_classes
+from ._native_r18_tables import read_r18_mline_styles, read_r18_tables
 from ._native_r2004 import read_r18_sections
 
 
@@ -21,7 +21,7 @@ _ENTITY_NAMES = {
     24: 'DIMENSION_ANG2LN', 25: 'DIMENSION_RADIUS', 26: 'DIMENSION_DIAMETER',
     27: 'POINT', 28: '3DFACE', 29: 'POLYLINE_PFACE', 30: 'POLYLINE_MESH',
     31: 'SOLID', 32: 'TRACE', 34: 'VIEWPORT', 35: 'ELLIPSE', 36: 'SPLINE',
-    37: 'REGION', 38: '3DSOLID', 44: 'MTEXT', 45: 'LEADER',
+    37: 'REGION', 38: '3DSOLID', 40: 'RAY', 41: 'XLINE', 44: 'MTEXT', 45: 'LEADER',
     47: 'MLINE', 77: 'LWPOLYLINE', 78: 'HATCH', 0x4B03: 'WIPEOUT',
 }
 _ENTITY_KINDS = set(range(1, 48)) - {42}
@@ -33,7 +33,7 @@ def _decode_body(record):
     kind, reader = record.kind, record.data_reader
     from ._native_dimension import decode_dimension
     from ._native_entities import (
-        _region, decode_attribute, decode_entity, decode_vertex2d,
+        _lwpolyline, _region, decode_attribute, decode_entity, decode_vertex2d,
         decode_vertex3d, _polyline2d, _polyline3d,
     )
     from ._native_hatch import decode_hatch
@@ -41,21 +41,27 @@ def _decode_body(record):
 
     if kind == 78:
         return decode_hatch(reader, r18=True)
+    if kind == 77:
+        return _lwpolyline(reader, vertex_ids_present=record.version >= b'AC1024')
     if kind in (2, 3):
-        return decode_attribute(kind, reader, 'utf-8', split_string=True, r18=True)
+        return decode_attribute(kind, reader, 'utf-8', split_string=True, version=record.version)
     if kind in (20, 21, 22, 23, 24, 25, 26):
-        return decode_dimension(kind, reader, split_string=True, r18=True)
+        return decode_dimension(kind, reader, split_string=True, version=record.version)
     if kind in (15, 16):
         return _polyline2d(reader, r18=True) if kind == 15 else _polyline3d(reader, r18=True)
     if kind == 10:
-        return decode_vertex2d(reader, r18=True)
+        return decode_vertex2d(reader, r18=record.version >= b'AC1024')
     if kind == 11:
         return decode_vertex3d(reader)
     if kind in (37, 38):
         return _region(reader, record.data_end)
     if kind == 36:
         from ._native_entities import _spline
-        return _spline(reader, r18=True)
+        return _spline(reader, r18=record.r2013_plus)
+    if kind == 44:
+        from ._native_entities import _mtext
+        return _mtext(reader, split_string=True, r18=True, r2018=record.r2018_plus,
+                      rect_height_present=record.version >= b'AC1021')
     if kind in (17, 18, 19, 27):
         return _geometry(kind, reader)
     return decode_entity(kind, reader, split_string=True, r18=True)
@@ -79,6 +85,8 @@ def _read_type_handles(record, common, attributes, name):
     elif name == 'LEADER':
         attributes['annotation_handle'] = resolve_handle(reader.handle(), record.handle)
         attributes['dimstyle_handle'] = resolve_handle(reader.handle(), record.handle)
+    elif name == 'MLINE':
+        attributes['mline_style_handle'] = resolve_handle(reader.handle(), record.handle)
     elif name == 'HATCH':
         for path, count in zip(attributes['_paths'], attributes.pop('_boundary_handle_counts')):
             path['source_handles'] = []
@@ -107,22 +115,32 @@ def _finish_text(attributes):
 
 
 def read_r18_dwg(source: str | Path):
-    """Read AC1032 records without invoking ODA or another converter."""
-    from .native import NativeDrawing, UnsupportedDwgError
+    """Read supported section-based records without an external converter."""
+    from .native import _CODEPAGES, NativeDrawing, UnsupportedDwgError
 
     source = Path(source)
     data = source.read_bytes()
-    sections = read_r18_sections(data)
+    if data[:6] == b'AC1021':
+        from ._native_r2007 import read_r2007_sections
+        sections = read_r2007_sections(data)
+    else:
+        sections = read_r18_sections(data)
     acds = next((section['data'] for section in sections.values()
                  if section['name'] == 'AcDb:AcDsPrototype_1b'), b'')
     sab_records = read_acds_sab_records(acds)
     _, objects = read_r18_objects(data, sections)
+    class_section = next((section['data'] for section in sections.values()
+                          if section['name'] == 'AcDb:Classes'), None)
+    classes = {}
+    if class_section is not None:
+        encoding = _CODEPAGES[int.from_bytes(data[19:21], 'little')] if data[:6] == b'AC1018' else None
+        classes = read_section_classes(data, class_section, encoding)
     r18_blocks, owner_by_handle = read_r18_blocks(objects)
     layers, styles, linetypes = read_r18_tables(objects)
     blocks = {
         handle: {
             'name': block.name, 'base_point': block.base_point,
-            'external': bool(block.xref_path),
+            'external': bool(block.xref_path or any(block.flags[2:4])),
             'xref_path': block.xref_path,
         }
         for handle, block in r18_blocks.items()
@@ -136,14 +154,21 @@ def read_r18_dwg(source: str | Path):
 
     for record in objects.values():
         kind = record.kind
+        name = _ENTITY_NAMES.get(kind, f'TYPE_{kind:X}')
+        if kind in classes:
+            name, is_entity = classes[kind]
+            if not is_entity and record.handle not in owner_by_handle:
+                continue
         if kind in (4, 5, 6, 49, 51, 53, 57):
             continue
-        if kind not in _ENTITY_KINDS and record.handle not in owner_by_handle:
+        if kind not in _ENTITY_KINDS and name != 'HELIX' and record.handle not in owner_by_handle:
             continue
-        if kind not in _ENTITY_KINDS:
+        if kind not in _ENTITY_KINDS and name != 'HELIX':
             owner = owner_by_handle[record.handle]
-            name = _ENTITY_NAMES.get(kind, f'TYPE_{kind:X}')
-            unsupported_blocks.setdefault(owner, Counter())[name] += 1
+            if blocks[owner]['name'].upper() == '*MODEL_SPACE':
+                unsupported[name] += 1
+            else:
+                unsupported_blocks.setdefault(owner, Counter())[name] += 1
             continue
 
         if kind == 0x4B03:
@@ -152,17 +177,13 @@ def read_r18_dwg(source: str | Path):
         else:
             common = read_r18_common(record)
         handles = read_r18_common_handles(record, common, owner_by_handle.get(record.handle))
-        name = _ENTITY_NAMES.get(kind, f'TYPE_{kind:X}')
-        if kind not in _ENTITY_KINDS:
-            if common['mode'] == 2:
-                unsupported[name] += 1
-            elif handles['owner'] is not None:
-                unsupported_blocks.setdefault(handles['owner'], Counter())[name] += 1
-            continue
-
         if kind != 0x4B03:
             try:
-                attributes = _decode_body(record)
+                if name == 'HELIX':
+                    from ._native_entities import decode_helix
+                    attributes = decode_helix(record.data_reader, r2013_plus=record.r2013_plus)
+                else:
+                    attributes = _decode_body(record)
             except (DwgFormatError, ValueError) as exc:
                 if kind == 38 and record.handle in sab_records:
                     # The linked AcDs SAB is authoritative when the inline solid
@@ -251,6 +272,8 @@ def read_r18_dwg(source: str | Path):
         else:
             attributes['_points'] = [vertex['location'] for vertex in vertices]
 
+    from ._native_entities import attach_mline_styles
+    attach_mline_styles(entities, read_r18_mline_styles(objects, linetypes))
     return NativeDrawing(
         entities, layers, dict(unsupported), len(objects), styles, linetypes, blocks,
         {owner: dict(types) for owner, types in unsupported_blocks.items()},

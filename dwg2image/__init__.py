@@ -1,6 +1,5 @@
 """Pure-Python DWG decoding and rendering."""
 from pathlib import Path
-import tempfile
 
 from ._conversion import inspect_dwg, inspect_dxf
 from .render import dxf_to_png
@@ -23,11 +22,9 @@ def dwg_to_dxf(source: str | Path, destination: str | Path) -> Path:
 def dwg_to_png(source: str | Path, destination: str | Path, *,
                dpi: int = 300,
                background: str | None = None) -> Path:
-    """Convert DWG to a modelspace PNG; temporary DXF is removed afterwards."""
-    destination = Path(destination)
-    if destination.exists():
-        raise FileExistsError(destination)
-    with tempfile.TemporaryDirectory(prefix="dwg2image-render-") as directory:
-        intermediate = Path(directory) / "drawing.dxf"
-        dwg_to_dxf(source, intermediate)
-        return dxf_to_png(intermediate, destination, dpi=dpi, background=background)
+    """Convert DWG to a modelspace PNG."""
+    from ._native_export import to_dxf_document
+    from .render import _png_destination, _render_png
+
+    destination = _png_destination(destination, dpi)
+    return _render_png(to_dxf_document(read_dwg(source)), destination, dpi, background)
