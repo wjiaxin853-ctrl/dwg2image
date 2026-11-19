@@ -12,10 +12,68 @@ def _point(reader):
     return tuple(reader.double() for _ in range(3))
 
 
+def _legacy_dimension(kind, reader, *, split_string=False):
+    """R13/R14 dimension payload (ODA specification 20.4.22 - 20.4.29).
+
+    Legacy dimensions store every definition point as a 3BD and have no
+    attachment point / line-spacing / measured-value tail.
+    """
+    result = {
+        'extrusion': _point(reader),
+        'text_midpoint': (reader.rd(), reader.rd()),
+        'elevation': reader.double(),
+        '_flags1': reader.bits(8),
+    }
+    if split_string:
+        result['_text_bytes'] = reader.text().encode('utf-8')
+    else:
+        size = reader.short()
+        if size < 0:
+            raise DwgFormatError('negative dimension text length')
+        result['_text_bytes'] = reader.raw(size)
+    result.update(
+        text_rotation=math.degrees(reader.double()),
+        horizontal_direction=math.degrees(reader.double()),
+        xscale=reader.double(), yscale=reader.double(), zscale=reader.double(),
+        insert_rotation=math.degrees(reader.double()),
+    )
+    result['point12'] = (reader.rd(), reader.rd())
+    if kind == 20:
+        result.update(defpoint=_point(reader), defpoint2=_point(reader),
+                      defpoint3=_point(reader), _flags2=reader.bits(8))
+    elif kind in (21, 22):
+        result.update(defpoint2=_point(reader), defpoint3=_point(reader),
+                      defpoint=_point(reader),
+                      ext_line_rotation=math.degrees(reader.double()))
+        if kind == 21:
+            result['dim_rotation'] = math.degrees(reader.double())
+    elif kind == 23:
+        result.update(defpoint=_point(reader), defpoint2=_point(reader),
+                      defpoint3=_point(reader), defpoint4=_point(reader))
+    elif kind == 24:
+        result['defpoint5'] = (reader.rd(), reader.rd(), result['elevation'])
+        result.update(defpoint2=_point(reader), defpoint3=_point(reader),
+                      defpoint4=_point(reader), defpoint=_point(reader))
+    elif kind == 25:
+        result.update(defpoint=_point(reader), defpoint2=_point(reader))
+    elif kind == 26:
+        result.update(defpoint2=_point(reader), defpoint=_point(reader))
+    else:
+        raise DwgFormatError(f'unsupported legacy dimension type {kind}')
+    # DXF defaults for fields introduced in R2000 that legacy dimensions omit.
+    result.setdefault('attachment_point', 5)
+    result.setdefault('line_spacing_style', 1)
+    result.setdefault('line_spacing_factor', 1.0)
+    result.setdefault('actual_measurement', 0.0)
+    return result
+
+
 def decode_dimension(kind, reader, *, split_string=False, version=b'AC1015'):
     """Read an R2000+ ordinate, linear, aligned, angular, or diameter body."""
     if kind not in (20, 21, 22, 23, 24, 25, 26):
         raise DwgFormatError(f'unsupported dimension type {kind}')
+    if version < b'AC1015':
+        return _legacy_dimension(kind, reader, split_string=split_string)
     result = {'_version': reader.bits(8)} if version >= b'AC1024' else {}
     result.update({
         'extrusion': _point(reader),

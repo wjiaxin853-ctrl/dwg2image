@@ -409,6 +409,24 @@ def _cmc_color(reader):
     return index, rgb, flags
 
 
+def _shape(reader):
+    """SHAPE fields (ODA specification 20.4.37).
+
+    The glyph itself lives in an external SHX shape file, which is not part of
+    the DWG.  Callers consume the record but cannot render it without that file.
+    """
+    insert, scale = _point(reader), reader.double()
+    rotation = math.degrees(reader.double())
+    width = reader.double()
+    oblique = math.degrees(reader.double())
+    thickness = reader.double()
+    number = reader.short()
+    extrusion = _point(reader)
+    return {'insert': insert, 'scale': scale, 'rotation': rotation,
+            'width': width, 'oblique': oblique, 'thickness': thickness,
+            'shape_number': number, 'extrusion': extrusion}
+
+
 def _mtext(reader, *, split_string=False, r18=False, legacy=False, r2018=True, rect_height_present=True):
     insert, extrusion, text_direction = _point(reader), _point(reader), _point(reader)
     width = reader.double()
@@ -481,19 +499,23 @@ def _solid(reader):
     return result
 
 
-def _insert(reader, *, r18=False):
+def _insert(reader, *, r18=False, legacy=False):
     result = {'insert': _point(reader)}
-    flags = reader.bits(2)
-    if flags == 3:
-        scale = (1.0, 1.0, 1.0)
-    elif flags == 1:
-        scale = (1.0, reader.dd(1.0), reader.dd(1.0))
-    elif flags == 2:
-        xscale = reader.rd()
-        scale = (xscale, xscale, xscale)
+    if legacy:
+        # R13/R14 store the three scale factors unconditionally.
+        scale = (reader.double(), reader.double(), reader.double())
     else:
-        xscale = reader.rd()
-        scale = (xscale, reader.dd(xscale), reader.dd(xscale))
+        flags = reader.bits(2)
+        if flags == 3:
+            scale = (1.0, 1.0, 1.0)
+        elif flags == 1:
+            scale = (1.0, reader.dd(1.0), reader.dd(1.0))
+        elif flags == 2:
+            xscale = reader.rd()
+            scale = (xscale, xscale, xscale)
+        else:
+            xscale = reader.rd()
+            scale = (xscale, reader.dd(xscale), reader.dd(xscale))
     result.update(zip(('xscale', 'yscale', 'zscale'), scale))
     result['rotation'] = math.degrees(reader.double())
     result['extrusion'] = _point(reader)
@@ -518,7 +540,7 @@ def decode_entity(type_code, reader, *, split_string=False, r18=False, legacy=Fa
     if type_code == 0x2c:
         return _mtext(reader, split_string=split_string, r18=r18, legacy=legacy)
     if type_code == 7:
-        return _insert(reader, r18=r18)
+        return _insert(reader, r18=r18, legacy=legacy)
     if type_code == 0x2d:
         return _leader(reader, r18=r18, version=version)
     if type_code in (0x28, 0x29):

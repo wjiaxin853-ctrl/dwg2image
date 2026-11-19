@@ -92,13 +92,17 @@ def _solid_edges(sab_data):
     return tuple(edges.values())
 
 
-def to_dxf_document(drawing: NativeDrawing):
-    """Build a new DXF from supported modelspace and reachable block content."""
+def to_dxf_document(drawing: NativeDrawing, *, strict: bool = True):
+    """Build a new DXF from supported modelspace and reachable block content.
+
+    ``strict=False`` omits entity types this decoder does not implement instead
+    of raising; callers can inspect ``drawing.unsupported_*`` for the omissions.
+    """
     import ezdxf
     from ezdxf.entities.mline import MLineStyleElements, MLineVertex
     from ezdxf.math import Vec3
 
-    if drawing.unsupported_modelspace:
+    if strict and drawing.unsupported_modelspace:
         raise UnsupportedDwgError(f'unimplemented modelspace entities: {drawing.unsupported_modelspace}')
     document = ezdxf.new('R2018')
     document.units = 0  # Source INSUNITS has not been decoded; do not invent physical units.
@@ -164,7 +168,7 @@ def to_dxf_document(drawing: NativeDrawing):
         # ODA writes cached external-reference blocks (including their xref path)
         # instead of refusing the drawing; the DWG often stores the referenced
         # geometry even when the block is flagged external.
-        if drawing.unsupported_blocks.get(handle):
+        if strict and drawing.unsupported_blocks.get(handle):
             raise UnsupportedDwgError(f'unimplemented block entities: {drawing.unsupported_blocks[handle]}')
         active.add(handle)
         attributes = {'xref_path': block['xref_path']} if block.get('xref_path') else None
@@ -343,6 +347,9 @@ def to_dxf_document(drawing: NativeDrawing):
             attributes['prompt'] = prompt
             target = layout.add_attdef(tag, insert=insert, text=text,
                                        dxfattribs=attributes)
+        elif kind == '3DFACE':
+            points = attributes.pop('points')
+            target = layout.add_3dface(points, dxfattribs=attributes)
         elif kind == 'LEADER':
             annotation_handle = attributes.pop('annotation_handle')
             points = attributes.pop('_points')
@@ -444,23 +451,27 @@ def to_dxf_document(drawing: NativeDrawing):
     for leader, annotation_handle in leader_annotations:
         annotation = emitted.get(f'{annotation_handle:X}')
         if annotation is None:
-            raise UnsupportedDwgError(
-                f'LEADER annotation {annotation_handle:X} is not exported'
-            )
+            if strict:
+                raise UnsupportedDwgError(
+                    f'LEADER annotation {annotation_handle:X} is not exported'
+                )
+            continue
         leader.dxf.annotation_handle = annotation
     for boundary, handles in hatch_boundaries:
         if any(handle not in emitted for handle in handles):
-            raise UnsupportedDwgError('HATCH references an unexported boundary entity')
+            if strict:
+                raise UnsupportedDwgError('HATCH references an unexported boundary entity')
+            continue
         boundary.source_boundary_objects = [emitted[handle] for handle in handles]
     return document
 
 
-def native_to_dxf(source: str | Path, destination: str | Path) -> Path:
-    """Write an independently decoded DXF, refusing unsupported content."""
+def native_to_dxf(source: str | Path, destination: str | Path, *, strict: bool = True) -> Path:
+    """Write an independently decoded DXF; strict mode refuses unsupported content."""
     destination = Path(destination)
     if destination.exists():
         raise FileExistsError(destination)
-    document = to_dxf_document(read_dwg(source))
+    document = to_dxf_document(read_dwg(source), strict=strict)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='dwg2image-native-') as directory:
         staged = Path(directory) / 'drawing.dxf'

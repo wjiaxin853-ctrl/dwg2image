@@ -34,10 +34,12 @@ class NativeDrawing:
 
 _TYPES = {1: 'TEXT', 7: 'INSERT', 17: 'ARC', 18: 'CIRCLE', 19: 'LINE',
           27: 'POINT', 31: 'SOLID', 32: 'TRACE', 35: 'ELLIPSE', 36: 'SPLINE',
-          40: 'RAY', 41: 'XLINE', 44: 'MTEXT', 45: 'LEADER', 47: 'MLINE', 77: 'LWPOLYLINE'}
+          28: '3DFACE', 33: 'SHAPE', 40: 'RAY', 41: 'XLINE', 44: 'MTEXT',
+          45: 'LEADER', 47: 'MLINE', 77: 'LWPOLYLINE'}
 _NAMES = {**_TYPES, 2: 'ATTRIB', 3: 'ATTDEF', 15: 'POLYLINE_2D', 16: 'POLYLINE_3D',
           20: 'DIMENSION_ORDINATE', 21: 'DIMENSION_LINEAR',
-          22: 'DIMENSION_ALIGNED', 25: 'DIMENSION_RADIUS', 26: 'DIMENSION_DIAMETER',
+          22: 'DIMENSION_ALIGNED', 23: 'DIMENSION_ANG3PT',
+          24: 'DIMENSION_ANG2LN', 25: 'DIMENSION_RADIUS', 26: 'DIMENSION_DIAMETER',
           36: 'SPLINE', 37: 'REGION', 78: 'HATCH'}
 _ENTITY_TYPES = (set(range(1, 48)) - {42}) | {77, 78, 0x1F2}
 _CODEPAGES = {1: 'ascii', 28: 'cp1250', 29: 'cp1251', 30: 'cp1252',
@@ -221,6 +223,24 @@ def _geometry(kind, reader, *, legacy=False, version=b'AC1015'):
         result = dict(center=tuple(reader.double() for _ in range(3)), radius=reader.double())
     elif kind == 27:
         result = dict(location=tuple(reader.double() for _ in range(3)))
+    elif kind == 33:
+        from ._native_entities import _shape
+        return _shape(reader)
+    elif kind == 28:
+        if legacy:
+            points = [tuple(reader.double() for _ in range(3)) for _ in range(4)]
+            invisible = reader.short()
+        else:
+            no_flags = reader.bits(1)
+            z_zero = reader.bits(1)
+            x, y = reader.rd(), reader.rd()
+            z = 0.0 if z_zero else reader.rd()
+            points = [(x, y, z)]
+            for _ in range(3):
+                x, y, z = reader.dd(x), reader.dd(y), reader.dd(z)
+                points.append((x, y, z))
+            invisible = 0 if no_flags else reader.short()
+        return {'points': points, 'invisible_edges': invisible}
     else:
         from ._native_entities import decode_entity
         return decode_entity(kind, reader, legacy=legacy, version=version)
@@ -402,9 +422,14 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             from ._native_entities import decode_helix
             attributes = decode_helix(reader)
         elif kind == 37:
-            from ._native_entities import _region
-            attributes = _region(reader, endbit)
-        elif kind in (20, 21, 22, 25, 26):
+            if legacy:
+                # The R13/R14 REGION payload predates the ACIS layout decoded
+                # here; report it as unsupported instead of mis-parsing it.
+                attributes = None
+            else:
+                from ._native_entities import _region
+                attributes = _region(reader, endbit)
+        elif kind in (20, 21, 22, 23, 24, 25, 26):
             from ._native_dimension import decode_dimension
             attributes = decode_dimension(kind, reader, version=version)
         elif kind == 15:
@@ -426,6 +451,16 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
         if reader.pos != endbit:
             raise DwgFormatError(f'{name} {handle:X}: entity data ends at {reader.pos}, expected {endbit}')
         owner, layer, linetype = _handles(reader, endbit, handle, common, legacy)
+        if name == 'SHAPE':
+            # SHAPE needs its external SHX file for the glyph; consume the
+            # SHAPEFILE handle but report the missing glyph instead of emitting
+            # a misleading placeholder.
+            if common['mode'] == 2:
+                unsupported[name] += 1
+            elif common['mode'] == 0 and owner is not None:
+                unsupported_blocks.setdefault(owner, Counter())[name] += 1
+            reader.handle()
+            continue
         if '_text_bytes' in attributes:
             raw_text = attributes.pop('_text_bytes').removesuffix(b'\x00')
             try:
@@ -443,7 +478,7 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             attributes['block_handle'] = resolve_handle(reader.handle(), handle)
             if attributes.pop('_has_attribs'):
                 attributes['has_attributes'] = True
-        elif kind in (20, 21, 22, 25, 26):
+        elif kind in (20, 21, 22, 23, 24, 25, 26):
             attributes['dimstyle_handle'] = resolve_handle(reader.handle(), handle)
             attributes['geometry_block_handle'] = resolve_handle(reader.handle(), handle)
         elif kind == 45:

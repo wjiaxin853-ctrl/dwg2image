@@ -62,7 +62,7 @@ def _decode_body(record):
         from ._native_entities import _mtext
         return _mtext(reader, split_string=True, r18=True, r2018=record.r2018_plus,
                       rect_height_present=record.version >= b'AC1021')
-    if kind in (17, 18, 19, 27):
+    if kind in (17, 18, 19, 27, 28):
         return _geometry(kind, reader)
     return decode_entity(kind, reader, split_string=True, r18=True, version=record.version)
 

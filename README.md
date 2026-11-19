@@ -88,6 +88,7 @@ for entity in drawing.modelspace():
 | 3DFACE、SHAPE、REGION、3DSOLID、MULTILEADER、IMAGE、PDFUNDERLAY 等 | 未实现，相关内容导出时明确报错 |
 | 外部参照 | 导出 DWG 内缓存的块图元并保留 xref_path；块内实体未实现时明确报错 |
 | 复杂线型、循环块引用 | 未实现，使用时明确报错 |
+| 未实现实体（SHAPE/REGION/3DSOLID/MULTILEADER/IMAGE 等） | 默认 `strict=True` 报错；`strict=False` 时跳过并在 `read_dwg()` 计数 |
 | 其他 DWG 版本 | 尚未独立实现 |
 
 默认使用 **300 DPI、CAD 布局背景**，保留源颜色，并设置最小可见线宽。可显式传 `background="#FFFFFF"` 使用白底。
@@ -161,7 +162,9 @@ python3 -m venv .venv
 - 没有几何块的 DIMENSION 允许省略 `geometry`，与 ODA 导出一致。
 - 外部参照块改为导出缓存图元和 `xref_path`，不再一律报错。
 - 声明代码页解码失败时，对合法 UTF-8 文本做一次回退（不改变正常 GBK 文本）。
-- 以 128 个历史失败样例回归：成功数 86 → 94，无回归。详见 `doc/ODA逆向与失败样例修复.md`。
+- 以 128 个历史失败样例回归：成功数 86 → 94（严格模式），无回归。
+- 新增 `strict=False` 降级模式：跳过当前未实现实体而不是整份失败，`read_dwg()` 的未支持计数可查；降级模式下 117/128 可出图（94 个完整、23 个降级，11 个 pre-R13 老版本仍失败）。默认仍为 `strict=True`。
+- 补充 3DFACE、SHAPE 字段读取（SHAPE 需外部 SHX，记录为未支持）、角度标注、R13/R14 DIMENSION/INSERT、R13/R14 REGION 保护。详见 `doc/ODA逆向与失败样例修复.md`。
 
 ## 0.2.1 修复
 
