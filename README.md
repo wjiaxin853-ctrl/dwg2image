@@ -7,7 +7,7 @@
 
 **0.2 开始提供独立 Python AC1015 解码器**：直接解析对象索引、位流、句柄、基础实体、图层和文字样式，使用 ezdxf 输出 DXF、Matplotlib 渲染 PNG。默认路径不执行 ODA 或 Docker。
 
-> **实验阶段，支持范围有限。** 独立解码目前仅支持 AC1015（R2000）及下表列出的实体。未支持的模型空间或被引用块内容会明确报错，避免输出悄悄缺失对象的图纸。AC1032 尚未独立实现；可显式选择 ODA 兼容路径。
+> **实验阶段，支持范围有限。** 独立解码器支持 AC1015（R2000），并新增实验性的 AC1032（R2018）解析路径。R2018 目前只在本地 46 张样例上完成解析和 PNG 输出核对，不代表通用版本兼容；视觉结果也不保证与 ODA 完全一致。未支持的模型空间或被引用块内容会明确报错，避免静默漏图。也可显式选择 ODA 兼容路径。
 
 [安装](#安装) · [快速上手](#快速上手) · [支持范围](#支持范围) · [API](#api) · [ODA 兼容模式](#oda-兼容模式) · [验证](#验证与开发) · [问题反馈](https://github.com/wjiaxin853-ctrl/dwg2image/issues)
 
@@ -25,7 +25,7 @@ pip install --upgrade dwg2image
 
 ### DWG → PNG
 
-对于支持的 AC1015 图纸：
+对于支持范围内的 AC1015 或 AC1032 图纸：
 
 ```python
 from dwg2image import dwg_to_png
@@ -76,11 +76,13 @@ for entity in drawing.modelspace():
 | HATCH | 多段线和直线边界、图案线、种子点与边界引用；曲线边界导出暂未支持 |
 | LWPOLYLINE | 顶点、闭合、bulge、宽度和标高 |
 | SOLID、TRACE | 四顶点和厚度 |
-| INSERT | 基本块引用及嵌套块；带 ATTRIB 的引用尚未导出 |
+| INSERT | 基本块引用及嵌套块，支持带 ATTRIB 的引用 |
+| WIPEOUT | R2018 剪裁边界和图块内实体；复杂取景与遮挡顺序仍可能影响视觉结果 |
+| AC1032（R2018） | 实验性读取；对照 46 张本地样例完成解析和 PNG 输出，不代表其他 R2018 图纸均受支持 |
 | 图层、文字样式、简单线型 | 名称、颜色、字体引用、线宽及简单虚线模式 |
 | 标注、SPLINE、旧式 POLYLINE 等 | 未实现，相关内容导出时明确报错 |
 | 复杂线型、外部参照、循环块引用 | 未实现，使用时明确报错 |
-| AC1032 及其他 DWG 版本 | 尚未独立实现 |
+| 其他 DWG 版本 | 尚未独立实现 |
 
 默认使用 **300 DPI、CAD 布局背景**，保留源颜色，并设置最小可见线宽。可显式传 `background="#FFFFFF"` 使用白底。
 
@@ -162,6 +164,7 @@ dwg2image convert drawing.dwg drawing.dxf
 当前验证：
 
 - 25 份 AC1015 样例通过初版对象/已支持实体读取检查；这不等于 25 份都能完整导出。
+- 46 份 AC1032（R2018）本地样例当前均可解析并生成 PNG；其中补上了 WIPEOUT 和一份 AcDs SAB 3DSOLID。`417. Free CAD Details of Glass and Metal Railings for House Design` 的取景与 ODA 图片仍有明显差异，成功生成不等于视觉等价。
 - 3 份样例的 2384 个 LINE/CIRCLE/ARC/POINT 按句柄核对基础几何，最大数值差约 `6.9e-13`；ABB 对照中有 66 个图层名与 ODA 审计导出不同，保留源文件的图层事实。
 - `1 刀开关.dwg` 的模型空间 62 个实体可完整导出，DXF 审计错误为 0。测试禁止 `subprocess.run` 后，DWG→DXF→PNG 仍成功。
 - **macOS ARM64** 已验证独立解码与 PNG 渲染；**Linux x86-64、Linux ARM64** 已在没有 ODA 的环境中验证同一图纸解出 62 个实体（仅解码，未验证这些环境的 PNG 依赖）。Windows 尚未运行验证。CI 配置暂未上线（当前 GitHub 凭证缺少 workflow 权限），不据此宣称所有平台、格式及实体均已验证。
@@ -192,4 +195,4 @@ DWG2IMAGE_TEST_DIR=/path/to/demo .venv/bin/python -m unittest -v
 
 ## 当前开发进展
 
-新增 AC1015 MTEXT、ELLIPSE 和部分 HATCH 支持。5 张样例的 42 个 MTEXT 与原版 ODA 新导出的 DXF 按句柄核对字段一致；ABB 的 12 个填充边界也完成顶点、闭合和标志核对。修复普通虚线被未使用的辅助字段误判为复杂线型的问题。真实样例参与的 22 项测试通过。AC1032、标注、旧式多段线及其他未支持内容仍会拒绝导出；这些开发改动尚未发布到 PyPI。
+新增 AC1015 MTEXT、ELLIPSE 和部分 HATCH 支持。5 张样例的 42 个 MTEXT 与原版 ODA 新导出的 DXF 按句柄核对字段一致；ABB 的 12 个填充边界也完成顶点、闭合和标志核对。修复普通虚线被未使用的辅助字段误判为复杂线型的问题。R2018 独立路径仍属实验开发，尚未发布到 PyPI；标注、旧式多段线及其他未支持内容仍会拒绝导出。

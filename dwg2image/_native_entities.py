@@ -20,7 +20,7 @@ def _thickness(reader):
     return 0.0 if reader.bits(1) else reader.double()
 
 
-def _text(reader):
+def _text(reader, *, split_string=False):
     flags = reader.bits(8)
     elevation = 0.0 if flags & 1 else reader.rd()
     x, y = reader.rd(), reader.rd()
@@ -31,13 +31,29 @@ def _text(reader):
     result['rotation'] = 0.0 if flags & 8 else math.degrees(reader.rd())
     result['height'] = reader.rd()
     result['width'] = 1.0 if flags & 16 else reader.rd()
-    length = reader.short()
-    if length < 0:
-        raise DwgFormatError('negative TEXT byte length')
-    result['_text_bytes'] = reader.raw(length)
+    if split_string:
+        result['_text_bytes'] = reader.text().encode('utf-8')
+    else:
+        length = reader.short()
+        if length < 0:
+            raise DwgFormatError('negative TEXT byte length')
+        result['_text_bytes'] = reader.raw(length)
     result['text_generation_flag'] = 0 if flags & 32 else reader.short()
     result['halign'] = 0 if flags & 64 else reader.short()
     result['valign'] = 0 if flags & 128 else reader.short()
+    return result
+
+
+def decode_attribute(type_code, reader, encoding, *, split_string=False, r18=False):
+    result = _text(reader, split_string=split_string)
+    result.update(tag=reader.text(encoding), field_length=reader.short(),
+                  flags=reader.bits(8))
+    if type_code == 3:
+        result['prompt'] = reader.text(encoding)
+    if r18:
+        if type_code == 3:
+            reader.bits(8)  # R2010 attribute-definition version
+        result['lock_position'] = reader.bits(1)
     return result
 
 
@@ -76,19 +92,243 @@ def _lwpolyline(reader):
     return result
 
 
-def _mtext(reader):
-    result = {'insert': _point(reader), 'extrusion': _point(reader),
-              'text_direction': _point(reader), 'width': reader.double(),
-              'char_height': reader.double(), 'attachment_point': reader.short(),
-              'flow_direction': reader.short(), 'rect_height': reader.double(),
-              'rect_width': reader.double()}
-    length = reader.short()
-    if length < 0:
-        raise DwgFormatError('negative MTEXT byte length')
-    result['_text_bytes'] = reader.raw(length)
+def _polyline2d(reader, *, r18=False):
+    flags, curve_type = reader.short(), reader.short()
+    start_width, end_width = reader.double(), reader.double()
+    result = {'flags': flags, 'curve_type': curve_type,
+              'default_start_width': start_width,
+              'default_end_width': end_width,
+              'thickness': _thickness(reader), 'elevation': reader.double(),
+              'extrusion': _extrusion(reader),
+              'first_vertex_handle': None, 'last_vertex_handle': None}
+    if r18:
+        result['owned_count'] = reader.long()
+    return result
+
+
+def decode_vertex2d(reader, *, r18=False):
+    """Read one R2000 VERTEX_2D body; the parent POLYLINE supplies z/thickness."""
+    flags = reader.bits(8)
+    location = _point(reader)
+    start_width = reader.double()
+    if start_width < 0:
+        start_width = abs(start_width)
+        end_width = start_width
+    else:
+        end_width = reader.double()
+    bulge = reader.double()
+    vertex_id = reader.long() if r18 else None
+    result = {'flags': flags, 'location': location,
+            'start_width': start_width, 'end_width': end_width,
+            'bulge': bulge, 'tangent_dir': reader.double()}
+    if r18:
+        result['vertex_id'] = vertex_id
+    return result
+
+
+def _polyline3d(reader, *, r18=False):
+    curve_flags, flags = reader.bits(8), reader.bits(8)
+    smooth_type = 5 if curve_flags & 1 else 6 if curve_flags & 2 else 0
+    result = {'flags': 8 | (1 if flags & 1 else 0) | (4 if smooth_type else 0),
+              'smooth_type': smooth_type}
+    if r18:
+        result['owned_count'] = reader.long()
+    return result
+
+
+def decode_vertex3d(reader):
+    return {'flags': reader.bits(8), 'location': _point(reader)}
+
+
+def _spline(reader, *, r18=False):
+    from ._native_bits import DwgFormatError
+
+    scenario = reader.long()
+    if r18:
+        spline_flags = reader.long()
+        reader.long()  # R2013+ knot parameter
+        if spline_flags & 1:
+            scenario = 2  # R2013+ fit-point flag selects the fit-point payload
+    degree = reader.long()
+
+    def points(count, label):
+        if count < 0 or count > (len(reader.data) * 8 - reader.pos) // 6:
+            raise DwgFormatError(f'invalid SPLINE {label} count')
+        return [_point(reader) for _ in range(count)]
+
+    if scenario == 2:
+        result = {'scenario': scenario, 'degree': degree,
+                  'fit_tolerance': reader.double(),
+                  'start_tangent': _point(reader), 'end_tangent': _point(reader)}
+        count = reader.long()
+        result['_fit_points'] = points(count, 'fit point')
+        return result
+    if scenario != 1:
+        raise DwgFormatError(f'unsupported SPLINE scenario {scenario}')
+
+    rational, closed, periodic = (reader.bits(1) for _ in range(3))
+    knot_tolerance, control_tolerance = reader.double(), reader.double()
+    knot_count, control_count = reader.long(), reader.long()
+    has_weights = reader.bits(1)
+    if knot_count < 0 or knot_count > (len(reader.data) * 8 - reader.pos) // 2:
+        raise DwgFormatError('invalid SPLINE knot count')
+    knots = [reader.double() for _ in range(knot_count)]
+    control_points, weights = [], []
+    for _ in range(control_count):
+        control_points.append(_point(reader))
+        if has_weights:
+            weights.append(reader.double())
+    return {'scenario': scenario, 'degree': degree,
+            'rational': bool(rational), 'closed': bool(closed), 'periodic': bool(periodic),
+            'knot_tolerance': knot_tolerance, 'control_tolerance': control_tolerance,
+            'knots': knots, '_control_points': control_points, '_weights': weights}
+
+
+def _leader(reader, *, r18=False):
+    reader.bits(1)  # reserved
+    annotation_type, path_type = reader.short(), reader.short()
+    count = reader.long()
+    if count < 0 or count > (len(reader.data) * 8 - reader.pos) // 6:
+        raise DwgFormatError('invalid LEADER vertex count')
+    result = {'annotation_type': annotation_type, 'path_type': path_type,
+              '_points': [_point(reader) for _ in range(count)],
+              'endpoint_projection': _point(reader), 'extrusion': _point(reader),
+              'horizontal_direction': _point(reader),
+              'leader_offset_block_ref': _point(reader),
+              '_unknown_vector': _point(reader)}
+    if not r18 or annotation_type != 3:
+        result['text_height'], result['text_width'] = reader.double(), reader.double()
+    result['hookline_direction'] = reader.bits(1)
+    result['has_arrowhead'] = bool(reader.bits(1))
+    result['_unknown_short'], result['_unknown_bits'] = 0, (0, 0)
+    if r18:
+        remaining = getattr(reader, 'limit', len(reader.data) * 8) - reader.pos
+        if remaining >= 2:
+            result['_unknown_short'] = reader.short()
+        remaining = getattr(reader, 'limit', len(reader.data) * 8) - reader.pos
+        if remaining >= 2:
+            result['_unknown_bits'] = (reader.bits(1), reader.bits(1))
+    else:
+        result['_unknown_short'] = reader.short()
+        result['_unknown_bits'] = (reader.bits(1), reader.bits(1))
+    return result
+
+
+def _region(reader, endbit):
+    empty = bool(reader.bits(1))
+    unknown = reader.bits(1)
+    version = reader.short()
+    if version != 1:
+        return None
+
+    sat_data = bytearray()
+    if not empty:
+        while True:
+            size = reader.long()
+            if size < 0 or size > (endbit - reader.pos) // 8:
+                raise DwgFormatError('invalid REGION SAT block size')
+            if not size:
+                break
+            for value in reader.raw(size):
+                if 0x20 <= value <= 0x7e:
+                    value = 0x9f - value
+                if value == 9:
+                    value = 0x20
+                sat_data.append(value)
+
+    wireframe = None
+    if reader.bits(1):
+        point = _point(reader) if reader.bits(1) else None
+        isoline_count = reader.long()
+        isolines_present = bool(reader.bits(1))
+
+        def read_wire():
+            wire = {'type': reader.bits(8), 'selection_marker': reader.long(),
+                    'color': reader.short(), 'acis_index': reader.long()}
+            point_count = reader.long()
+            if point_count < 0 or point_count > (endbit - reader.pos) // 6:
+                raise DwgFormatError('invalid REGION wire point count')
+            wire['points'] = [_point(reader) for _ in range(point_count)]
+            if reader.bits(1):
+                wire['transform'] = {
+                    'axes_translation': [_point(reader) for _ in range(4)],
+                    'scale': reader.double(),
+                    'flags': [reader.bits(1) for _ in range(3)]}
+            return wire
+
+        wire_count = reader.long()
+        if wire_count < 0 or wire_count > (endbit - reader.pos) // 17:
+            raise DwgFormatError('invalid REGION wire count')
+        wires = [read_wire() for _ in range(wire_count)]
+        silhouette_count = reader.long()
+        if silhouette_count < 0 or silhouette_count > (endbit - reader.pos) // 23:
+            raise DwgFormatError('invalid REGION silhouette count')
+        silhouettes = []
+        for _ in range(silhouette_count):
+            silhouette = {'viewport_id': reader.long(), 'target': _point(reader),
+                          'direction': _point(reader), 'up': _point(reader),
+                          'perspective': bool(reader.bits(1))}
+            count = reader.long()
+            if count < 0 or count > (endbit - reader.pos) // 17:
+                raise DwgFormatError('invalid REGION silhouette wire count')
+            silhouette['wires'] = [read_wire() for _ in range(count)]
+            silhouettes.append(silhouette)
+        wireframe = {'point': point, 'isoline_count': isoline_count,
+                     'isolines_present': isolines_present, 'wires': wires,
+                     'silhouettes': silhouettes}
+
+    acis_empty = bool(reader.bits(1))
+    if not acis_empty:
+        return None
+    return {'acis_empty': empty, 'unknown': unknown, 'version': version,
+            '_sat_data': sat_data.decode('latin1'), '_wireframe': wireframe}
+
+
+def _mtext(reader, *, split_string=False, r18=False):
+    insert, extrusion, text_direction = _point(reader), _point(reader), _point(reader)
+    width = reader.double()
+    rect_height = reader.double() if r18 else None
+    char_height = reader.double()
+    attachment_point, flow_direction = reader.short(), reader.short()
+    extents_height, extents_width = reader.double(), reader.double()
+    result = {'insert': insert, 'extrusion': extrusion,
+              'text_direction': text_direction, 'width': width,
+              'char_height': char_height, 'attachment_point': attachment_point,
+              'flow_direction': flow_direction,
+              'rect_height': rect_height if r18 else extents_height,
+              'rect_width': width if r18 else extents_width}
+    if split_string:
+        result['_text_bytes'] = reader.text().encode('utf-8')
+    else:
+        length = reader.short()
+        if length < 0:
+            raise DwgFormatError('negative MTEXT byte length')
+        result['_text_bytes'] = reader.raw(length)
     result['line_spacing_style'] = reader.short()
     result['line_spacing_factor'] = reader.double()
     reader.bits(1)  # R2000 reserved/unknown bit, before the handle stream.
+    if r18:
+        background_flags = reader.long()
+        if background_flags & 0x11:
+            # None of the supplied AC1032 drawings uses an MTEXT background.
+            raise DwgFormatError('R2018 MTEXT background color is not implemented')
+        not_annotative = reader.bits(1)
+        if not_annotative:
+            reader.short()  # version
+            reader.bits(1)  # default flag
+            reader.long()  # redundant attachment point
+            for _ in range(10):
+                reader.double()  # redundant axes, insertion, width and extents
+            column_type = reader.short()
+            if column_type:
+                height_count = reader.long()
+                reader.double()  # column width
+                reader.double()  # column gutter
+                auto_height = reader.bits(1)
+                reader.bits(1)  # flow reversed
+                if column_type == 2 and not auto_height:
+                    for _ in range(height_count):
+                        reader.double()
     return result
 
 
@@ -107,7 +347,7 @@ def _solid(reader):
     return result
 
 
-def _insert(reader):
+def _insert(reader, *, r18=False):
     result = {'insert': _point(reader)}
     flags = reader.bits(2)
     if flags == 3:
@@ -124,16 +364,26 @@ def _insert(reader):
     result['rotation'] = math.degrees(reader.double())
     result['extrusion'] = _point(reader)
     result['_has_attribs'] = bool(reader.bits(1))
+    if r18 and result['_has_attribs']:
+        result['_attribute_count'] = reader.long()
     return result
 
 
-def decode_entity(type_code, reader):
+def decode_entity(type_code, reader, *, split_string=False, r18=False):
     """Read supported R2000-specific data, leaving trailing handles untouched.
 
     Reserved keys: _points carries LWPOLYLINE x/y/start-width/end-width/bulge;
     _text_bytes preserves source text bytes; _has_attribs selects INSERT tails.
     TEXT/MTEXT STYLE and INSERT BLOCK_HEADER handles follow common entity handles.
     """
-    decoder = {1: _text, 7: _insert, 0x1f: _solid, 0x20: _solid, 0x23: _ellipse, 0x2c: _mtext,
-               0x4d: _lwpolyline}.get(type_code)
+    if type_code == 1:
+        return _text(reader, split_string=split_string)
+    if type_code == 0x2c:
+        return _mtext(reader, split_string=split_string, r18=r18)
+    if type_code == 7:
+        return _insert(reader, r18=r18)
+    if type_code == 0x2d:
+        return _leader(reader, r18=r18)
+    decoder = {0x1f: _solid, 0x20: _solid, 0x23: _ellipse,
+               0x24: _spline, 0x4d: _lwpolyline}.get(type_code)
     return decoder(reader) if decoder else None

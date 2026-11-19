@@ -12,20 +12,24 @@ def _point(reader):
     return tuple(reader.double() for _ in range(3))
 
 
-def decode_dimension(kind, reader):
-    """Read an R2000 ordinate, linear, aligned, or diameter dimension body."""
-    if kind not in (20, 21, 22, 26):
+def decode_dimension(kind, reader, *, split_string=False, r18=False):
+    """Read an R2000+ ordinate, linear, aligned, angular, or diameter body."""
+    if kind not in (20, 21, 22, 23, 24, 25, 26):
         raise DwgFormatError(f'unsupported dimension type {kind}')
-    result = {
+    result = {'_version': reader.bits(8)} if r18 else {}
+    result.update({
         'extrusion': _point(reader),
         'text_midpoint': (reader.rd(), reader.rd()),
         'elevation': reader.double(),
         '_flags1': reader.bits(8),
-    }
-    size = reader.short()
-    if size < 0:
-        raise DwgFormatError('negative dimension text length')
-    result['_text_bytes'] = reader.raw(size)
+    })
+    if split_string:
+        result['_text_bytes'] = reader.text().encode('utf-8')
+    else:
+        size = reader.short()
+        if size < 0:
+            raise DwgFormatError('negative dimension text length')
+        result['_text_bytes'] = reader.raw(size)
     result.update(text_rotation=math.degrees(reader.double()),
                   horizontal_direction=math.degrees(reader.double()),
                   xscale=reader.double(), yscale=reader.double(),
@@ -35,6 +39,10 @@ def decode_dimension(kind, reader):
                   line_spacing_style=reader.short(),
                   line_spacing_factor=reader.double(),
                   actual_measurement=reader.double())
+    if r18:
+        result['_unknown_r2007'] = reader.bits(1)
+        result['_flip_arrow1'] = reader.bits(1)
+        result['_flip_arrow2'] = reader.bits(1)
     result['point12'] = (reader.rd(), reader.rd())
     if kind == 20:
         result.update(defpoint=_point(reader), defpoint2=_point(reader),
@@ -45,6 +53,14 @@ def decode_dimension(kind, reader):
                       ext_line_rotation=math.degrees(reader.double()))
         if kind == 21:
             result['dim_rotation'] = math.degrees(reader.double())
+    elif kind == 23:
+        result.update(defpoint=_point(reader), defpoint2=_point(reader),
+                      defpoint3=_point(reader), defpoint4=_point(reader))
+    elif kind == 24:
+        point16 = (reader.rd(), reader.rd(), result['elevation'])
+        result.update(defpoint5=point16, defpoint2=_point(reader),
+                      defpoint3=_point(reader), defpoint4=_point(reader),
+                      defpoint=_point(reader))
     else:
         result.update(defpoint2=_point(reader), defpoint=_point(reader),
                       leader_length=reader.double())

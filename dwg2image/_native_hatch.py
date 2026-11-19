@@ -1,4 +1,4 @@
-"""AC1015 HATCH payload (ODA DWG specification section 20.4.75).
+"""AC1015 and R2010+ HATCH payload (ODA DWG specification section 20.4.75).
 
 The caller decodes the pattern name with the drawing code page and resolves
 boundary object handles from the separate handle stream.
@@ -10,7 +10,7 @@ from ._native_bits import DwgFormatError
 
 def _count(reader, minimum_bits=1, short=False):
     count = reader.short() if short else reader.long()
-    if count < 0 or count > (len(reader.data) * 8 - reader.pos) // minimum_bits:
+    if count < 0 or count > (getattr(reader, 'limit', len(reader.data) * 8) - reader.pos) // minimum_bits:
         raise DwgFormatError('HATCH array count exceeds available data')
     return count
 
@@ -19,7 +19,7 @@ def _xy(reader):
     return (reader.rd(), reader.rd())
 
 
-def _edge(reader):
+def _edge(reader, r18=False):
     kind = reader.bits(8)
     if kind == 1:
         return dict(type='line', start=_xy(reader), end=_xy(reader))
@@ -45,16 +45,41 @@ def _edge(reader):
             controls.append(_xy(reader))
             if rational:
                 weights.append(reader.double())
-        return dict(type='spline', degree=degree, rational=rational, periodic=periodic,
+        edge = dict(type='spline', degree=degree, rational=rational, periodic=periodic,
                     knot_values=knots, control_points=controls, weights=weights)
+        if r18:
+            edge['fit_points'] = [_xy(reader) for _ in range(_count(reader, 128))]
+            if edge['fit_points']:
+                edge['start_tangent'] = _xy(reader)
+                edge['end_tangent'] = _xy(reader)
+        return edge
     raise DwgFormatError(f'unknown HATCH edge type {kind}')
 
 
-def decode_hatch(reader):
-    """Read an R2000 HATCH payload, preserving paths and definition lines."""
+def decode_hatch(reader, *, r18=False):
+    """Read HATCH data; r18 selects the R2010+ split-string object reader.
+
+    The R2010+ gradient block is retained even when gradient fill is disabled.
+    Colors retain their position, index, packed color method/RGB, and flags.
+    """
+    gradient = None
+    if r18:
+        gradient = {
+            'gradient': reader.long(), 'reserved': reader.long(),
+            'rotation': reader.double(), 'shift': reader.double(),
+            'one_color': reader.long(), 'tint': reader.double(),
+        }
+        gradient['colors'] = [
+            (reader.double(), reader.short(), reader.long(), reader.bits(8))
+            for _ in range(_count(reader, 14))]
+        gradient['name'] = reader.text()
     result = {'elevation': (0.0, 0.0, reader.double()),
               'extrusion': tuple(reader.double() for _ in range(3))}
-    result['_pattern_name_bytes'] = reader.raw(_count(reader, 8, short=True))
+    if r18:
+        result['_gradient'] = gradient
+        result['pattern_name'] = reader.text()
+    else:
+        result['_pattern_name_bytes'] = reader.raw(_count(reader, 8, short=True))
     result['solid_fill'] = reader.bits(1)
     result['associative'] = reader.bits(1)
     paths, counts = [], []
@@ -72,8 +97,11 @@ def decode_hatch(reader):
                 vertices.append((*xy, reader.double() if bulges else 0.0))
             path['vertices'] = vertices
         else:
-            path['edges'] = [_edge(reader) for _ in range(_count(reader, 8))]
-        counts.append(_count(reader, 8))
+            path['edges'] = [_edge(reader, r18) for _ in range(_count(reader, 8))]
+        boundary_count = reader.long()
+        if boundary_count < 0:
+            raise DwgFormatError('negative HATCH boundary handle count')
+        counts.append(boundary_count)
         paths.append(path)
     result['_paths'] = paths
     result['_boundary_handle_counts'] = counts

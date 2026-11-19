@@ -135,11 +135,19 @@ class NativeDrawingTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 dwg_to_dxf(source, output)
 
-    def test_unsupported_modelspace_is_reported_and_never_silently_exported(self):
+    def test_dimension_geometry_blocks_survive_native_projection(self):
+        import ezdxf
         drawing = read_dwg(self.directory / '1 空开.dwg')
-        self.assertEqual(drawing.unsupported_modelspace, {'DIMENSION_LINEAR': 3})
+        self.assertEqual(drawing.unsupported_modelspace, {})
+        dimensions = [entity for entity in drawing.modelspace()
+                      if entity['type'] == 'DIMENSION_LINEAR']
+        self.assertEqual(len(dimensions), 3)
+        self.assertAlmostEqual(dimensions[0]['attributes']['actual_measurement'], 120, places=4)
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'missing-dimensions.dxf'
-            with self.assertRaises(UnsupportedDwgError):
-                dwg_to_dxf(self.directory / '1 空开.dwg', output)
-            self.assertFalse(output.exists())
+            output = Path(directory) / 'dimensions.dxf'
+            dwg_to_dxf(self.directory / '1 空开.dwg', output)
+            document = ezdxf.readfile(output)
+            projected = list(document.modelspace().query('DIMENSION'))
+            self.assertEqual(len(projected), 3)
+            self.assertTrue(all(entity.dxf.geometry in document.blocks for entity in projected))
+            self.assertFalse(document.audit().errors)
