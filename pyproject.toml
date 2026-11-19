@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dwg2image"
-version = "0.2.2"
-description = "Experimental independent AC1015 DWG decoding and PNG rendering"
+version = "0.3.0"
+description = "Experimental independent DWG decoding and PNG rendering"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["ezdxf>=1.4.5,<2", "matplotlib>=3.8,<4", "Pillow>=10"]
@@ -18,6 +18,3 @@ dwg2image = "dwg2image._conversion:main"
 
 [tool.setuptools]
 packages = ["dwg2image"]
-
-[tool.setuptools.package-data]
-dwg2image = ["run_headless.sh"]
