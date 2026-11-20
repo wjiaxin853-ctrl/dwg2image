@@ -4,7 +4,7 @@ Bit encodings are checked against ODA's published format description and
 sample DWG/ODA-DXF pairs. Unimplemented modelspace types remain explicit.
 """
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from bisect import bisect_left, bisect_right
 import math
 from pathlib import Path
@@ -27,6 +27,7 @@ class NativeDrawing:
     linetypes: dict[int, dict]
     blocks: dict[int, dict]
     unsupported_blocks: dict[int, dict[str, int]]
+    image_defs: dict[int, dict] = field(default_factory=dict)
 
     def modelspace(self) -> list[dict]:
         return [entity for entity in self.entities if entity['mode'] == 2]
@@ -365,6 +366,7 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
     encoding = _CODEPAGES[page]
     classes = _classes(data, sections[1], encoding)
     entities, layers, styles, linetypes, blocks = [], {}, {}, {}, {}
+    image_defs = {}
     mline_styles = {}
     vertices_by_handle = {}
     attributes_by_owner = {}
@@ -408,6 +410,12 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
                 vertex['type'] = kind
                 vertices_by_handle[handle] = vertex
             continue
+        class_name = classes.get(kind, ('', False))[0]
+        if class_name == 'IMAGEDEF':
+            from ._native_entities import decode_image_def
+            reader.long()  # reactor count
+            image_defs[handle] = decode_image_def(reader, encoding)
+            continue
         if kind not in _ENTITY_TYPES and not classes.get(kind, ('', False))[1]:
             continue
         common = _common(reader, legacy)
@@ -434,10 +442,17 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             attributes = decode_dimension(kind, reader, version=version)
         elif kind == 15:
             from ._native_entities import _polyline2d
-            attributes = _polyline2d(reader)
+            attributes = _polyline2d(reader, legacy=legacy)
         elif kind == 16:
             from ._native_entities import _polyline3d
             attributes = _polyline3d(reader)
+        elif name == 'IMAGE':
+            from ._native_entities import decode_image
+            attributes = decode_image(reader)
+        elif name == 'LWPOLYLINE':
+            # R13/R14 keep LWPOLYLINE as a custom class (0x217), not 0x4D.
+            from ._native_entities import _lwpolyline
+            attributes = _lwpolyline(reader, legacy=legacy)
         else:
             attributes = _geometry(kind, reader, legacy=legacy, version=version) if kind in _TYPES else None
         if attributes is None:
@@ -472,6 +487,9 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
             attributes['pattern_name'] = attributes.pop('_pattern_name_bytes').removesuffix(b'\x00').decode(encoding)
             for path, count in zip(attributes['_paths'], attributes.pop('_boundary_handle_counts')):
                 path['source_handles'] = [f'{resolve_handle(reader.handle(), handle):X}' for _ in range(count)]
+        if name == 'IMAGE':
+            attributes['image_def_handle'] = resolve_handle(reader.handle(), handle)
+            attributes['image_def_reactor_handle'] = resolve_handle(reader.handle(), handle)
         if kind in (1, 2, 3, 44):
             attributes['style_handle'] = resolve_handle(reader.handle(), handle)
         elif kind == 7:
@@ -544,7 +562,8 @@ def _read_ac1015_dwg(source: str | Path) -> NativeDrawing:
     from ._native_entities import attach_mline_styles
     attach_mline_styles(entities, mline_styles)
     return NativeDrawing(entities, layers, dict(unsupported), count, styles, linetypes, blocks,
-                         {owner: dict(types) for owner, types in unsupported_blocks.items()})
+                         {owner: dict(types) for owner, types in unsupported_blocks.items()},
+                         image_defs)
 
 
 def read_dwg(source: str | Path) -> NativeDrawing:

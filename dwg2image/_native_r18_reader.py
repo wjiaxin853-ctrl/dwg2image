@@ -101,6 +101,9 @@ def _read_type_handles(record, common, attributes, name):
         remaining = reader.limit - reader.pos
         if remaining > 7:
             raise DwgFormatError(f'WIPEOUT {record.handle:X}: unparsed handle data')
+    elif name == 'IMAGE':
+        attributes['image_def_handle'] = resolve_handle(reader.handle(), record.handle)
+        attributes['image_def_reactor_handle'] = resolve_handle(reader.handle(), record.handle)
     elif name in ('POLYLINE_2D', 'POLYLINE_3D'):
         count = attributes.pop('owned_count', 0)
         attributes['_vertex_handles'] = [
@@ -151,21 +154,61 @@ def read_r18_dwg(source: str | Path):
     attributes_by_owner = {}
     unsupported = Counter()
     unsupported_blocks = {}
+    image_defs = {}
 
     for record in objects.values():
         kind = record.kind
         name = _ENTITY_NAMES.get(kind, f'TYPE_{kind:X}')
         if kind in classes:
             name, is_entity = classes[kind]
+            if name == 'IMAGEDEF':
+                from ._native_entities import decode_image_def
+                try:
+                    image_defs[record.handle] = decode_image_def(
+                        record.data_reader, 'utf-16le')
+                except (DwgFormatError, ValueError):
+                    pass
+                continue
             if not is_entity and record.handle not in owner_by_handle:
                 continue
         if kind in (4, 5, 6, 49, 51, 53, 57):
             continue
-        if kind not in _ENTITY_KINDS and name != 'HELIX' and record.handle not in owner_by_handle:
+        if kind not in _ENTITY_KINDS and name not in ('HELIX', 'IMAGE', 'MESH') and record.handle not in owner_by_handle:
             continue
-        if kind not in _ENTITY_KINDS and name != 'HELIX':
+        if kind not in _ENTITY_KINDS and name not in ('HELIX', 'IMAGE', 'MESH'):
             owner = owner_by_handle[record.handle]
-            if blocks[owner]['name'].upper() == '*MODEL_SPACE':
+            # Custom objects (e.g. Tianzheng TCH_*) often store a proxy graphic
+            # preview; export it verbatim when present.
+            try:
+                common = read_r18_common(record)
+                handles = read_r18_common_handles(record, common, owner)
+            except (DwgFormatError, ValueError):
+                common = {'mode': 2, 'color': 256, 'linetype': 0, 'invisible': 0,
+                          'ltscale': 1.0, 'lineweight': 28, 'true_color': None,
+                          'transparency': None, 'graphic_data': None}
+                handles = {'owner': owner, 'layer': 0, 'linetype': 0}
+            if name in ('EXTRUDEDSURFACE', 'LOFTEDSURFACE', 'REVOLVEDSURFACE',
+                        'SWEPTSURFACE', 'PLANESURFACE'):
+                # ezdxf does not render surface entities, and their DWG preview
+                # bytes do not round-trip through the proxy graphic reader.
+                if blocks[owner]['name'].upper() == '*MODEL_SPACE':
+                    unsupported[name] += 1
+                else:
+                    unsupported_blocks.setdefault(owner, Counter())[name] += 1
+            elif common.get('graphic_data'):
+                entities.append({
+                    'type': 'ACAD_PROXY_ENTITY', 'handle': f'{record.handle:X}',
+                    'owner': handles['owner'], 'layer_handle': handles['layer'],
+                    'linetype_handle': handles['linetype'],
+                    'linetype_flag': common['linetype'], 'mode': common['mode'],
+                    'color': common['color'], 'true_color': common['true_color'],
+                    'transparency': common['transparency'],
+                    'invisible': common['invisible'], 'ltscale': common['ltscale'],
+                    'lineweight': common['lineweight'],
+                    'attributes': {'proxy_graphic': common['graphic_data'],
+                                   'class_name': name},
+                })
+            elif blocks[owner]['name'].upper() == '*MODEL_SPACE':
                 unsupported[name] += 1
             else:
                 unsupported_blocks.setdefault(owner, Counter())[name] += 1
@@ -182,6 +225,13 @@ def read_r18_dwg(source: str | Path):
                 if name == 'HELIX':
                     from ._native_entities import decode_helix
                     attributes = decode_helix(record.data_reader, r2013_plus=record.r2013_plus)
+                elif name == 'IMAGE':
+                    from ._native_entities import decode_image
+                    attributes = decode_image(record.data_reader,
+                                              r2010_plus=record.version >= b'AC1024')
+                elif name == 'MESH':
+                    from ._native_entities import decode_mesh
+                    attributes = decode_mesh(record.data_reader)
                 else:
                     attributes = _decode_body(record)
             except (DwgFormatError, ValueError) as exc:
@@ -203,7 +253,30 @@ def read_r18_dwg(source: str | Path):
                 # version-specific inline ACIS and wireframe payload.
                 record.data_reader.pos = record.data_end
         if attributes is None:
-            if common['mode'] == 2:
+            if name in ('EXTRUDEDSURFACE', 'LOFTEDSURFACE', 'REVOLVEDSURFACE',
+                        'SWEPTSURFACE', 'PLANESURFACE'):
+                # ezdxf does not render surface entities, and their DWG preview
+                # bytes do not round-trip through the proxy graphic reader.
+                if blocks[owner]['name'].upper() == '*MODEL_SPACE':
+                    unsupported[name] += 1
+                else:
+                    unsupported_blocks.setdefault(owner, Counter())[name] += 1
+            elif common.get('graphic_data'):
+                # Custom objects (e.g. Tianzheng TCH_*) often carry a proxy
+                # graphic preview; export it verbatim so the reference renderer
+                # draws exactly what the DWG previews.
+                entities.append({
+                    'type': 'ACAD_PROXY_ENTITY', 'handle': f'{record.handle:X}',
+                    'owner': handles['owner'], 'layer_handle': handles['layer'],
+                    'linetype_handle': handles['linetype'], 'linetype_flag': common['linetype'],
+                    'mode': common['mode'], 'color': common['color'],
+                    'true_color': common['true_color'], 'transparency': common['transparency'],
+                    'invisible': common['invisible'], 'ltscale': common['ltscale'],
+                    'lineweight': common['lineweight'],
+                    'attributes': {'proxy_graphic': common['graphic_data'],
+                                   'class_name': name},
+                })
+            elif common['mode'] == 2:
                 unsupported[name] += 1
             elif handles['owner'] is not None:
                 unsupported_blocks.setdefault(handles['owner'], Counter())[name] += 1
@@ -278,4 +351,5 @@ def read_r18_dwg(source: str | Path):
     return NativeDrawing(
         entities, layers, dict(unsupported), len(objects), styles, linetypes, blocks,
         {owner: dict(types) for owner, types in unsupported_blocks.items()},
+        image_defs,
     )

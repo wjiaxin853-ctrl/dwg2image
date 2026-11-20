@@ -9,10 +9,11 @@ def read_r18_common(record):
     """Read common entity data from an AC1027/AC1032 object record."""
     reader = record.data_reader
     graphic = reader.bits(1)
+    graphic_data = None
     if graphic:
         size_bytes = reader.bits(3) if record.version >= b'AC1024' else 4
         size = int.from_bytes(reader.raw(size_bytes), 'little')
-        reader.skip(size * 8)
+        graphic_data = reader.raw(size)
 
     mode = reader.bits(2)
     reactors = reader.long()
@@ -58,6 +59,7 @@ def read_r18_common(record):
         'invisible': invisible,
         'lineweight': lineweight,
         'graphic_present': bool(graphic),
+        'graphic_data': graphic_data,
     }
 
 

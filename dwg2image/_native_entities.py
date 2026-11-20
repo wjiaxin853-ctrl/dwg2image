@@ -4,6 +4,7 @@ The caller owns common entity data, code-page decoding and trailing handles.
 Readers must already be bounded to the object's data bit range.
 """
 import math
+import struct
 
 from ._native_bits import DwgFormatError
 
@@ -81,7 +82,7 @@ def decode_attribute(type_code, reader, encoding, *, split_string=False, version
     return result
 
 
-def _lwpolyline(reader, *, vertex_ids_present=False):
+def _lwpolyline(reader, *, vertex_ids_present=False, legacy=False):
     flags = reader.short()
     result = {'flags': (1 if flags & 512 else 0) | (128 if flags & 256 else 0)}
     if flags & 4:
@@ -103,11 +104,15 @@ def _lwpolyline(reader, *, vertex_ids_present=False):
         raise DwgFormatError('LWPOLYLINE point count exceeds available data')
     points = []
     if count:
-        x, y = reader.rd(), reader.rd()
-        points.append([x, y, 0.0, 0.0, 0.0])
-        for _ in range(count - 1):
-            x, y = reader.dd(x), reader.dd(y)
+        if legacy:
+            # R13/R14 store every vertex as two raw doubles.
+            points = [[reader.rd(), reader.rd(), 0.0, 0.0, 0.0] for _ in range(count)]
+        else:
+            x, y = reader.rd(), reader.rd()
             points.append([x, y, 0.0, 0.0, 0.0])
+            for _ in range(count - 1):
+                x, y = reader.dd(x), reader.dd(y)
+                points.append([x, y, 0.0, 0.0, 0.0])
     for index in range(bulges):
         points[index][4] = reader.double()
     if ids:
@@ -119,14 +124,15 @@ def _lwpolyline(reader, *, vertex_ids_present=False):
     return result
 
 
-def _polyline2d(reader, *, r18=False):
+def _polyline2d(reader, *, r18=False, legacy=False):
     flags, curve_type = reader.short(), reader.short()
     start_width, end_width = reader.double(), reader.double()
     result = {'flags': flags, 'curve_type': curve_type,
               'default_start_width': start_width,
               'default_end_width': end_width,
-              'thickness': _thickness(reader), 'elevation': reader.double(),
-              'extrusion': _extrusion(reader),
+              'thickness': reader.double() if legacy else _thickness(reader),
+              'elevation': reader.double(),
+              'extrusion': _point(reader) if legacy else _extrusion(reader),
               'first_vertex_handle': None, 'last_vertex_handle': None}
     if r18:
         result['owned_count'] = reader.long()
@@ -395,6 +401,144 @@ def _region(reader, endbit):
             '_sat_data': sat_data.decode('latin1'), '_wireframe': wireframe}
 
 
+def decode_image(reader, *, r2010_plus=False):
+    """IMAGE payload (ODA specification 20.4.4x / LibreDWG dwg.spec).
+
+    Handles (imagedef, imagedef reactor) follow in the entity handle stream.
+    """
+    result = {'class_version': reader.long(),
+              'insert': _point(reader), 'u_pixel': _point(reader),
+              'v_pixel': _point(reader),
+              'image_size': (reader.rd(), reader.rd()),
+              'flags': reader.short(),
+              'clipping': reader.bits(1),
+              'brightness': reader.bits(8),
+              'contrast': reader.bits(8),
+              'fade': reader.bits(8)}
+    if r2010_plus:
+        result['clip_mode'] = reader.bits(1)
+    boundary_type = reader.short()
+    if boundary_type == 1:
+        count = 2
+    else:
+        count = reader.long()
+    if count < 2 or count > 100000:
+        raise DwgFormatError('invalid IMAGE clip boundary count')
+    result['clipping_boundary_type'] = boundary_type
+    result['_boundary'] = [(reader.rd(), reader.rd()) for _ in range(count)]
+    return result
+
+
+def _parse_image_def(reader, encoding):
+    """IMAGEDEF payload in DWG field order (works for inline and stream text)."""
+    class_version = reader.long()
+    if not 0 <= class_version <= 10:
+        raise DwgFormatError(f'invalid IMAGEDEF class version {class_version}')
+    image_size = (reader.rd(), reader.rd())
+    if not (0 < image_size[0] < 1e7 and 0 < image_size[1] < 1e7):
+        raise DwgFormatError('invalid IMAGEDEF image size')
+    if getattr(reader, 'string_reader', None) is None:
+        size = reader.short()
+        if size < 0 or size > 4096:
+            raise DwgFormatError('invalid IMAGEDEF path length')
+        raw = reader.raw(size)
+        if encoding == 'utf-16le' and len(raw) % 2 == 0 and all(
+                byte == 0 for byte in raw[1::2]):
+            text = raw.decode('utf-16le', errors='replace')
+        elif encoding == 'utf-16le':
+            text = raw.decode('cp1252', errors='replace')
+        else:
+            text = raw.decode(encoding, errors='replace')
+    else:
+        text = reader.text(encoding)
+    is_loaded = bool(reader.bits(1))
+    resunits = reader.bits(8)
+    pixel_size = (reader.rd(), reader.rd())
+    if not (0 < pixel_size[0] < 1e4 and 0 < pixel_size[1] < 1e4):
+        raise DwgFormatError('invalid IMAGEDEF pixel size')
+    return {'class_version': class_version, 'image_size': image_size,
+            'file_path': text.removesuffix('\x00'), 'is_loaded': is_loaded,
+            'resunits': resunits, 'pixel_size': pixel_size}
+
+
+def decode_image_def(reader, encoding):
+    """IMAGEDEF object payload.
+
+    R2004 files put a short object header before the payload and store the
+    filename inline (not in the string stream), so this tries a direct parse
+    first and then scans a small bit window for a valid payload.
+    """
+    from ._native_r18_objects import _ObjectReader
+    data_end = getattr(reader, 'limit', len(reader.data) * 8)
+    base = reader.pos
+    try:
+        reader.pos = base
+        return _parse_image_def(reader, encoding)
+    except (DwgFormatError, ValueError, IndexError, struct.error):
+        pass
+    reader.pos = base
+    string_reader = getattr(reader, 'string_reader', None)
+    for offset in range(1, 400):
+        string_pos = string_reader.pos if string_reader is not None else None
+        try:
+            candidate = _ObjectReader(reader.data, base + offset, data_end,
+                                      string_reader)
+            result = _parse_image_def(candidate, encoding)
+            reader.pos = candidate.pos
+            return result
+        except (DwgFormatError, ValueError, IndexError, struct.error):
+            if string_pos is not None:
+                string_reader.pos = string_pos
+            continue
+    raise DwgFormatError('IMAGEDEF payload not found')
+
+
+def decode_mesh(reader):
+    """SubDMesh payload (version 2), reversed from ODA DXF + DWG records.
+
+    Fields: version BS, watertight B, subdivision vertex/vertex arrays (3BD),
+    flat face list (count + indices per face, BL), edges (BL pairs), edge
+    creases (BD) and two trailing bits.
+    """
+    version = reader.short()
+    watertight = bool(reader.bits(1))
+    num_subdiv = reader.long()
+    if num_subdiv < 0 or num_subdiv > 1000000:
+        raise DwgFormatError('invalid MESH subdivision vertex count')
+    subdiv_vertices = [_point(reader) for _ in range(num_subdiv)]
+    num_vertices = reader.long()
+    if num_vertices < 0 or num_vertices > 1000000:
+        raise DwgFormatError('invalid MESH vertex count')
+    vertices = [_point(reader) for _ in range(num_vertices)]
+    num_face_items = reader.long()
+    if num_face_items < 0 or num_face_items > 4000000:
+        raise DwgFormatError('invalid MESH face list size')
+    faces = []
+    face_list = [reader.long() for _ in range(num_face_items)]
+    position = 0
+    while position < len(face_list):
+        size = face_list[position]
+        position += 1
+        if size < 3 or size > 16 or position + size > len(face_list):
+            raise DwgFormatError('invalid MESH face index count')
+        faces.append(face_list[position:position + size])
+        position += size
+    num_edges = reader.long()
+    if num_edges < 0 or num_edges > 4000000:
+        raise DwgFormatError('invalid MESH edge count')
+    edges = [(reader.long(), reader.long()) for _ in range(num_edges)]
+    num_creases = reader.long()
+    if num_creases < 0 or num_creases > 4000000:
+        raise DwgFormatError('invalid MESH crease count')
+    creases = [reader.double() for _ in range(num_creases)]
+    unknown_b1 = reader.bits(1)
+    unknown_b2 = reader.bits(1)
+    return {'version': version, 'watertight': watertight,
+            '_subdiv_vertices': subdiv_vertices, '_vertices': vertices,
+            '_faces': faces, '_edges': edges, '_creases': creases,
+            '_mesh_tail_bits': (unknown_b1, unknown_b2)}
+
+
 def _cmc_color(reader):
     """Read a CmColor (R2004+): BS index, BL RGB, RC flags, optional names."""
     index = reader.short()
@@ -490,12 +634,14 @@ def _ellipse(reader):
             'start_param': reader.double(), 'end_param': reader.double()}
 
 
-def _solid(reader):
-    result = {'thickness': _thickness(reader)}
+def _solid(reader, *, legacy=False):
+    # R13/R14 store thickness as a plain BD and extrusion as 3BD; the BT/BE
+    # bit-prefix forms were introduced in R2000.
+    result = {'thickness': reader.double() if legacy else _thickness(reader)}
     elevation = reader.double()
     for index in range(4):
         result[f'vtx{index}'] = (reader.rd(), reader.rd(), elevation)
-    result['extrusion'] = _extrusion(reader)
+    result['extrusion'] = _point(reader) if legacy else _extrusion(reader)
     return result
 
 
@@ -547,6 +693,9 @@ def decode_entity(type_code, reader, *, split_string=False, r18=False, legacy=Fa
         return {'start': _point(reader), 'unit_vector': _point(reader)}
     if type_code == 0x2f:
         return _mline(reader)
-    decoder = {0x1f: _solid, 0x20: _solid, 0x23: _ellipse,
-               0x24: _spline, 0x4d: _lwpolyline}.get(type_code)
+    if type_code in (0x1f, 0x20):
+        return _solid(reader, legacy=legacy)
+    if type_code == 0x4d:
+        return _lwpolyline(reader, legacy=legacy)
+    decoder = {0x23: _ellipse, 0x24: _spline}.get(type_code)
     return decoder(reader) if decoder else None

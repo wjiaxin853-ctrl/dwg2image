@@ -100,7 +100,7 @@ def to_dxf_document(drawing: NativeDrawing, *, strict: bool = True):
     """
     import ezdxf
     from ezdxf.entities.mline import MLineStyleElements, MLineVertex
-    from ezdxf.math import Vec3
+    from ezdxf.math import Vec2, Vec3
 
     if strict and drawing.unsupported_modelspace:
         raise UnsupportedDwgError(f'unimplemented modelspace entities: {drawing.unsupported_modelspace}')
@@ -263,9 +263,12 @@ def to_dxf_document(drawing: NativeDrawing, *, strict: bool = True):
             geometry_name = None
             if block_handle:
                 if block_handle not in drawing.blocks:
-                    raise DwgFormatError(f'missing dimension geometry block {block_handle:X}')
-                build_block(block_handle)
-                geometry_name = output_block_names[block_handle]
+                    if strict:
+                        raise DwgFormatError(f'missing dimension geometry block {block_handle:X}')
+                    block_handle = 0
+                else:
+                    build_block(block_handle)
+                    geometry_name = output_block_names[block_handle]
             flags = attributes.pop('_flags1')
             base_type = {'DIMENSION_ORDINATE': 6, 'DIMENSION_LINEAR': 0,
                          'DIMENSION_ALIGNED': 1, 'DIMENSION_ANG2LN': 2,
@@ -364,6 +367,52 @@ def to_dxf_document(drawing: NativeDrawing, *, strict: bool = True):
                                        dxfattribs=attributes)
             if annotation_handle:
                 leader_annotations.append((target, annotation_handle))
+        elif kind == 'MESH':
+            from ezdxf.render import MeshBuilder
+            vertices = attributes.pop('_vertices')
+            faces = attributes.pop('_faces')
+            for key in ('version', 'watertight', '_subdiv_vertices', '_edges',
+                        '_creases', '_mesh_tail_bits'):
+                attributes.pop(key, None)
+            builder = MeshBuilder()
+            for face in faces:
+                builder.add_face([vertices[index] for index in face])
+            target = builder.render_mesh(layout, dxfattribs=attributes)
+        elif kind == 'ACAD_PROXY_ENTITY':
+            data = attributes.pop('proxy_graphic', None)
+            attributes.pop('class_name', None)
+            target = layout.new_entity('ACAD_PROXY_ENTITY', dxfattribs=attributes)
+            if data:
+                target.proxy_graphic = data
+        elif kind == 'IMAGE':
+            def_handle = attributes.pop('image_def_handle')
+            attributes.pop('image_def_reactor_handle', None)
+            attributes.pop('class_version', None)
+            boundary = attributes.pop('_boundary', None)
+            attributes.pop('clipping_boundary_type', None)
+            imdef = drawing.image_defs.get(def_handle)
+            if imdef is None:
+                if strict:
+                    raise UnsupportedDwgError(f'IMAGE {entity["handle"]} references a missing IMAGEDEF')
+                emitted[entity['handle']] = None
+                return
+            pixels = tuple(max(1, int(round(value))) for value in imdef.get('pixel_size', (1.0, 1.0)))
+            image_def = document.objects.add_image_def(imdef.get('file_path', ''), size_in_pixel=pixels)
+            insert = attributes.pop('insert')
+            u_pixel = attributes.pop('u_pixel')
+            v_pixel = attributes.pop('v_pixel')
+            image_size = attributes.pop('image_size')
+            import math as _math
+            width = image_size[0] * _math.hypot(u_pixel[0], u_pixel[1])
+            height = image_size[1] * _math.hypot(v_pixel[0], v_pixel[1])
+            target = layout.add_image(image_def, insert=insert,
+                                      size_in_units=(max(width, 1e-9), max(height, 1e-9)),
+                                      rotation=0.0, dxfattribs=attributes)
+            target.dxf.u_pixel = Vec3(*u_pixel)
+            target.dxf.v_pixel = Vec3(*v_pixel)
+            target.dxf.image_size = Vec2(*image_size)
+            if boundary and len(boundary) > 2:
+                target.set_boundary_path([Vec2(x, y) for x, y in boundary])
         elif kind == 'WIPEOUT':
             boundary = attributes.pop('_boundary_points')
             attributes['flags'] = attributes.pop('display_props')
